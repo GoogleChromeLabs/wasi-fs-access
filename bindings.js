@@ -197,7 +197,7 @@ const filestat_t = struct({
   size: filesize_t,
   accessTime: timestamp_t,
   modTime: timestamp_t,
-  changeTime: timestamp_t,
+  changeTime: timestamp_t
 });
 
 const PREOPEN = '/sandbox';
@@ -305,7 +305,11 @@ module.exports = ({ memory, env, args }) => {
       fsFlags,
       fdPtr
     ) {
-      fd_t.set(memory.buffer, fdPtr, open(resolvePath(dirFd, pathPtr, pathLen)));
+      fd_t.set(
+        memory.buffer,
+        fdPtr,
+        open(resolvePath(dirFd, pathPtr, pathLen))
+      );
     },
     fd_close(fd) {
       openFiles.delete(fd);
@@ -356,15 +360,27 @@ module.exports = ({ memory, env, args }) => {
     path_create_directory(dirFd, pathPtr, pathLen) {
       fs.mkdirSync(resolvePath(dirFd, pathPtr, pathLen));
     },
-    path_rename(oldDirFd, oldPathPtr, oldPathLen, newDirFd, newPathPtr, newPathLen) {
-      fs.renameSync(resolvePath(oldDirFd, oldPathPtr, oldPathLen), resolvePath(newDirFd, newPathPtr, newPathLen));
+    path_rename(
+      oldDirFd,
+      oldPathPtr,
+      oldPathLen,
+      newDirFd,
+      newPathPtr,
+      newPathLen
+    ) {
+      fs.renameSync(
+        resolvePath(oldDirFd, oldPathPtr, oldPathLen),
+        resolvePath(newDirFd, newPathPtr, newPathLen)
+      );
     },
     path_remove_directory(dirFd, pathPtr, pathLen) {
       fs.rmdirSync(resolvePath(dirFd, pathPtr, pathLen));
     },
     fd_readdir(fd, bufPtr, bufLen, cookie, bufUsedPtr) {
       const initialBufPtr = bufPtr;
-      let items = fs.readdirSync(openFiles.get(fd).path, { withFileTypes: true }).slice(Number(cookie));
+      let items = fs
+        .readdirSync(openFiles.get(fd).path, { withFileTypes: true })
+        .slice(Number(cookie));
       for (let item of items) {
         let itemSize = dirent_t.size + item.name.length;
         if (bufLen < itemSize) {
