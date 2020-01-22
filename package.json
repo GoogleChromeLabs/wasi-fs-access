@@ -1,0 +1,9 @@
+{
+  "quokka": {
+    "env": {
+      "params": {
+        "runner": "--experimental-wasi-unstable-preview1 --experimental-wasm-bigint"
+      }
+    }
+  }
+}
