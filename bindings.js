@@ -319,10 +319,8 @@ module.exports = ({ memory, env, args }) => {
       let nread = 0;
       for (let i = 0; i < iovsLen; i++) {
         let iovec = iovec_t.get(memory.buffer, iovsPtr);
-        let read = fs.readSync(
-          fd,
-          new Uint8Array(memory.buffer, iovec.bufPtr, iovec.bufLen)
-        );
+        let buf = new Uint8Array(memory.buffer, iovec.bufPtr, iovec.bufLen);
+        let read = fs.readSync(fd, buf, 0, buf.length);
         nread += read;
         if (read < iovec.bufLen) {
           break;
