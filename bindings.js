@@ -44,7 +44,7 @@ const string = {
   get(buf, ptr, len) {
     return textDecoder.decode(new Uint8Array(buf, ptr, len));
   },
-  set(buf, ptr, value, len) {
+  set(buf, ptr, value, len = value.length) {
     let { read } = textEncoder.encodeInto(value, new Uint8Array(buf, ptr, len));
     if (read < value.length) {
       throw new Error(`Insufficient space.`);
@@ -170,6 +170,36 @@ const fdstat_t = struct({
   rightsInheriting: rights_t
 });
 
+const dircookie_t = uint64_t;
+
+const inode_t = uint64_t;
+
+const dirent_t = struct({
+  next: dircookie_t,
+  ino: inode_t,
+  nameLen: uint32_t,
+  type: filetype_t
+});
+
+const device_t = uint64_t;
+
+const linkcount_t = uint32_t;
+
+const filesize_t = uint64_t;
+
+const timestamp_t = uint64_t;
+
+const filestat_t = struct({
+  dev: device_t,
+  ino: inode_t,
+  filetype: filetype_t,
+  nlink: linkcount_t,
+  size: filesize_t,
+  accessTime: timestamp_t,
+  modTime: timestamp_t,
+  changeTime: timestamp_t,
+});
+
 const PREOPEN = '/sandbox';
 
 const E = {
@@ -179,25 +209,32 @@ const E = {
 
 const PREOPEN_FD = 3;
 
-let nextFd = PREOPEN_FD;
-
-let openFiles = new Map([
-  [0, { fd: 0 }],
-  [1, { fd: 1 }],
-  [2, { fd: 2 }]
-]);
-
-function open(path) {
-  openFiles.set(nextFd, {
-    path,
-    fd: fs.openSync(path)
-  });
-  return nextFd++;
-}
-
-open('.');
-
 module.exports = ({ memory, env, args }) => {
+  let nextFd = PREOPEN_FD;
+
+  let openFiles = new Map([
+    [0, { fd: 0 }],
+    [1, { fd: 1 }],
+    [2, { fd: 2 }]
+  ]);
+
+  function open(path) {
+    openFiles.set(nextFd, {
+      path,
+      fd: fs.openSync(path)
+    });
+    return nextFd++;
+  }
+
+  open('.');
+
+  function resolvePath(dirFd, pathPtr, pathLen) {
+    return path.resolve(
+      openFiles.get(dirFd).path,
+      string.get(memory.buffer, pathPtr, pathLen)
+    );
+  }
+
   let envOffsets = [];
   let envBuf = '';
 
@@ -268,11 +305,7 @@ module.exports = ({ memory, env, args }) => {
       fsFlags,
       fdPtr
     ) {
-      let fullPath = path.resolve(
-        openFiles.get(dirFd).path,
-        string.get(memory.buffer, pathPtr, pathLen)
-      );
-      fd_t.set(memory.buffer, fdPtr, open(fullPath));
+      fd_t.set(memory.buffer, fdPtr, open(resolvePath(dirFd, pathPtr, pathLen)));
     },
     fd_close(fd) {
       openFiles.delete(fd);
@@ -320,11 +353,49 @@ module.exports = ({ memory, env, args }) => {
       fdstat.rightsBase = BigInt(-1);
       fdstat.rightsInheriting = BigInt(-1);
     },
-    path_create_directory() {},
-    path_rename() {},
-    path_remove_directory() {},
-    fd_readdir() {},
+    path_create_directory(dirFd, pathPtr, pathLen) {
+      fs.mkdirSync(resolvePath(dirFd, pathPtr, pathLen));
+    },
+    path_rename(oldDirFd, oldPathPtr, oldPathLen, newDirFd, newPathPtr, newPathLen) {
+      fs.renameSync(resolvePath(oldDirFd, oldPathPtr, oldPathLen), resolvePath(newDirFd, newPathPtr, newPathLen));
+    },
+    path_remove_directory(dirFd, pathPtr, pathLen) {
+      fs.rmdirSync(resolvePath(dirFd, pathPtr, pathLen));
+    },
+    fd_readdir(fd, bufPtr, bufLen, cookie, bufUsedPtr) {
+      const initialBufPtr = bufPtr;
+      let items = fs.readdirSync(openFiles.get(fd).path, { withFileTypes: true }).slice(Number(cookie));
+      for (let item of items) {
+        let itemSize = dirent_t.size + item.name.length;
+        if (bufLen < itemSize) {
+          bufPtr += bufLen;
+          break;
+        }
+        let dirent = dirent_t.get(memory.buffer, bufPtr);
+        dirent.next = ++cookie;
+        dirent.ino = BigInt(0); // TODO
+        dirent.nameLen = item.name.length;
+        dirent.type = item.isDirectory() ? 'directory' : 'regularFile';
+        string.set(memory.buffer, bufPtr + dirent_t.size, item.name);
+        bufPtr += itemSize;
+        bufLen -= itemSize;
+      }
+      size_t.set(memory.buffer, bufUsedPtr, bufPtr - initialBufPtr);
+    },
     path_readlink() {},
-    path_filestat_get() {}
+    path_filestat_get(dirFd, flags, pathPtr, pathLen, filestatPtr) {
+      let path = resolvePath(dirFd, pathPtr, pathLen);
+      let info = fs.statSync(path, { bigint: true });
+      let filestat = filestat_t.get(memory.buffer, filestatPtr);
+      filestat.dev = BigInt(0);
+      filestat.ino = BigInt(0); // TODO
+      filestat.filetype = info.isDirectory() ? 'directory' : 'regularFile';
+      filestat.nlink = 0;
+      filestat.size = info.size;
+      filestat.accessTime = info.atimeNs;
+      filestat.modTime = info.mtimeNs;
+      filestat.changeTime = info.ctimeNs;
+    },
+    fd_seek() {}
   };
 };
