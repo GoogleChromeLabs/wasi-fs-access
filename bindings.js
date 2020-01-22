@@ -352,8 +352,8 @@ module.exports = ({ memory, env, args }) => {
         ? 'directory'
         : 'regularFile';
       fdstat.flags = 0;
-      fdstat.rightsBase = BigInt(-1);
-      fdstat.rightsInheriting = BigInt(-1);
+      fdstat.rightsBase = -1n;
+      fdstat.rightsInheriting = -1n;
     },
     path_create_directory(dirFd, pathPtr, pathLen) {
       fs.mkdirSync(resolvePath(dirFd, pathPtr, pathLen));
@@ -387,7 +387,7 @@ module.exports = ({ memory, env, args }) => {
         }
         let dirent = dirent_t.get(memory.buffer, bufPtr);
         dirent.next = ++cookie;
-        dirent.ino = BigInt(0); // TODO
+        dirent.ino = 0n; // TODO
         dirent.nameLen = item.name.length;
         dirent.type = item.isDirectory() ? 'directory' : 'regularFile';
         string.set(memory.buffer, bufPtr + dirent_t.size, item.name);
@@ -401,8 +401,8 @@ module.exports = ({ memory, env, args }) => {
       let path = resolvePath(dirFd, pathPtr, pathLen);
       let info = fs.statSync(path, { bigint: true });
       let filestat = filestat_t.get(memory.buffer, filestatPtr);
-      filestat.dev = BigInt(0);
-      filestat.ino = BigInt(0); // TODO
+      filestat.dev = 0n;
+      filestat.ino = 0n; // TODO
       filestat.filetype = info.isDirectory() ? 'directory' : 'regularFile';
       filestat.nlink = 0;
       filestat.size = info.size;
