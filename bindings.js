@@ -12,15 +12,31 @@
 const fs = require('fs');
 const path = require('path');
 
-const std = ctor => ({
-  size: ctor.BYTES_PER_ELEMENT,
-  get(buf, ptr) {
-    return new ctor(buf, ptr, 1);
-  },
-  set(buf, ptr, value) {
-    new ctor(buf, ptr, 1)[0] = value;
+const dataViewMap = new WeakMap();
+function getDataView(buf) {
+  let dataView = dataViewMap.get(buf);
+  if (!dataView) {
+    dataView = new DataView(buf);
+    dataViewMap.set(buf, dataView);
   }
-});
+  return dataView;
+}
+
+const std = (name, size) => {
+  let get = DataView.prototype[`get${name}`];
+  let set = DataView.prototype[`set${name}`];
+
+  return {
+    size,
+    align: size,
+    get(buf, ptr) {
+      return get.call(getDataView(buf), ptr, true);
+    },
+    set(buf, ptr, value) {
+      return set.call(getDataView(buf), ptr, value, true);
+    }
+  };
+};
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -36,6 +52,14 @@ const string = {
   }
 };
 
+function alignTo(ptr, align) {
+  let mismatch = ptr % align;
+  if (mismatch) {
+    ptr += align - mismatch;
+  }
+  return ptr;
+}
+
 function struct(desc) {
   let Ctor = class {
     constructor(buf, ptr) {
@@ -44,13 +68,12 @@ function struct(desc) {
     }
   };
   let offset = 0;
+  let structAlign = 0;
   for (let name in desc) {
     let type = desc[name];
-    let align = type.size;
-    let mismatch = offset % align;
-    if (mismatch) {
-      offset += align - mismatch;
-    }
+    let fieldAlign = type.align;
+    structAlign = Math.max(structAlign, fieldAlign);
+    offset = alignTo(offset, fieldAlign);
     const fieldOffset = offset;
     Object.defineProperty(Ctor.prototype, name, {
       get() {
@@ -62,8 +85,10 @@ function struct(desc) {
     });
     offset += type.size;
   }
+  offset = alignTo(offset, structAlign);
   return {
     size: offset,
+    align: structAlign,
     get(buf, ptr) {
       return new Ctor(buf, ptr);
     }
@@ -73,6 +98,7 @@ function struct(desc) {
 function enumer(desc) {
   return {
     size: desc.base.size,
+    align: desc.base.align,
     get(buf, ptr) {
       let id = desc.base.get(buf, ptr);
       let name = desc.variants[id];
@@ -91,14 +117,14 @@ function enumer(desc) {
   };
 }
 
-const int8_t = std(Int8Array);
-const uint8_t = std(Uint8Array);
-const int16_t = std(Int16Array);
-const uint16_t = std(Uint16Array);
-const int32_t = std(Int32Array);
-const uint32_t = std(Uint32Array);
-const int64_t = std(BigInt64Array);
-const uint64_t = std(BigUint64Array);
+const int8_t = std('Int8', 1);
+const uint8_t = std('Uint8', 1);
+const int16_t = std('Int16', 2);
+const uint16_t = std('Uint16', 2);
+const int32_t = std('Int32', 4);
+const uint32_t = std('Uint32', 4);
+const int64_t = std('BigInt64', 8);
+const uint64_t = std('BigUint64', 8);
 
 const size_t = uint32_t;
 
