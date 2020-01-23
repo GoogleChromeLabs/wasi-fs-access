@@ -313,7 +313,19 @@ module.exports = ({
     );
   }
 
-  function forEachIoVec(fd: number, iovsPtr: number, iovsLen: number, handledPtr: number, cb: (realFd: number, buf: Uint8Array, offset: number, length: number, position: null) => number) {
+  function forEachIoVec(
+    fd: number,
+    iovsPtr: number,
+    iovsLen: number,
+    handledPtr: number,
+    cb: (
+      realFd: number,
+      buf: Uint8Array,
+      offset: number,
+      length: number,
+      position: null
+    ) => number
+  ) {
     fd = openFiles.get(fd).fd;
     let totalHandled = 0;
     for (let i = 0; i < iovsLen; i++) {
@@ -411,7 +423,12 @@ module.exports = ({
     fd_read(fd: number, iovsPtr: number, iovsLen: number, nreadPtr: number) {
       forEachIoVec(fd, iovsPtr, iovsLen, nreadPtr, fs.readSync);
     },
-    fd_write(fd: number, iovsPtr: number, iovsLen: number, nwrittenPtr: number) {
+    fd_write(
+      fd: number,
+      iovsPtr: number,
+      iovsLen: number,
+      nwrittenPtr: number
+    ) {
       forEachIoVec(fd, iovsPtr, iovsLen, nwrittenPtr, fs.writeSync);
     },
     fd_fdstat_get(fd: number, fdstatPtr: number) {
@@ -442,7 +459,13 @@ module.exports = ({
     path_remove_directory(dirFd: number, pathPtr: number, pathLen: number) {
       fs.rmdirSync(resolvePath(dirFd, pathPtr, pathLen));
     },
-    fd_readdir(fd: number, bufPtr: number, bufLen: number, cookie: bigint, bufUsedPtr: number) {
+    fd_readdir(
+      fd: number,
+      bufPtr: number,
+      bufLen: number,
+      cookie: bigint,
+      bufUsedPtr: number
+    ) {
       const initialBufPtr = bufPtr;
       let items = fs
         .readdirSync(openFiles.get(fd).path, { withFileTypes: true })
@@ -464,8 +487,21 @@ module.exports = ({
       }
       size_t.set(memory.buffer, bufUsedPtr, bufPtr - initialBufPtr);
     },
-    path_readlink(dirFd: number, pathPtr: number, pathLen: number, bufPtr: number, bufLen: number, bufUsedPtr: number) {},
-    path_filestat_get(dirFd: number, flags: any, pathPtr: number, pathLen: number, filestatPtr: number) {
+    path_readlink(
+      dirFd: number,
+      pathPtr: number,
+      pathLen: number,
+      bufPtr: number,
+      bufLen: number,
+      bufUsedPtr: number
+    ) {},
+    path_filestat_get(
+      dirFd: number,
+      flags: any,
+      pathPtr: number,
+      pathLen: number,
+      filestatPtr: number
+    ) {
       let path = resolvePath(dirFd, pathPtr, pathLen);
       let info = fs.statSync(path, { bigint: true });
       let filestat = filestat_t.get(memory.buffer, filestatPtr);
@@ -474,10 +510,10 @@ module.exports = ({
       filestat.filetype = info.isDirectory() ? 'directory' : 'regularFile';
       filestat.nlink = 0;
       // https://github.com/DefinitelyTyped/DefinitelyTyped/issues/30471#issuecomment-480900510
-      filestat.size = info.size as any as bigint;
-      filestat.accessTime = info.atimeNs as any as bigint;
-      filestat.modTime = info.mtimeNs as any as bigint;
-      filestat.changeTime = info.ctimeNs as any as bigint;
+      filestat.size = (info.size as any) as bigint;
+      filestat.accessTime = (info.atimeNs as any) as bigint;
+      filestat.modTime = (info.mtimeNs as any) as bigint;
+      filestat.changeTime = (info.ctimeNs as any) as bigint;
     },
     fd_seek(fd: number, offset: bigint, whence: number, filesizePtr: number) {}
   };
