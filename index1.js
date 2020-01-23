@@ -2,6 +2,7 @@
 
 const fs = require('fs').promises;
 const createBindings = require('./bindings');
+const Asyncify = require('asyncify-wasm');
 
 let realMemory;
 
@@ -22,10 +23,13 @@ let bindings = createBindings({
 
   let cache = new WeakMap();
 
-  let { instance } = await WebAssembly.instantiate(buf, {
+  let { instance } = await Asyncify.instantiate(buf, {
     wasi_unstable: new Proxy(bindings, {
 		get(target, name, receiver) {
 			let orig = Reflect.get(target, name, receiver);
+			if (!orig) {
+				throw new Error(`Missing function ${name}.`);
+			}
 			let wrapped = cache.get(orig);
 			if (wrapped === undefined) {
 				wrapped = (...args) => {
