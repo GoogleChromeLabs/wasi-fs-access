@@ -69,10 +69,10 @@ function struct(desc) {
         const fieldOffset = offset;
         Object.defineProperty(Ctor.prototype, name, {
             get() {
-                return type.get(this._buf, this._ptr + fieldOffset);
+                return type.get(this._buf, (this._ptr + fieldOffset));
             },
             set(value) {
-                type.set(this._buf, this._ptr + fieldOffset, value);
+                type.set(this._buf, (this._ptr + fieldOffset), value);
             }
         });
         offset += type.size;
@@ -215,7 +215,7 @@ module.exports = ({ memory, env, args }) => {
             if (handled < iovec.bufLen) {
                 break;
             }
-            iovsPtr += iovec_t.size;
+            iovsPtr = (iovsPtr + iovec_t.size);
         }
         size_t.set(memory.buffer, handledPtr, totalHandled);
     }
@@ -338,7 +338,6 @@ module.exports = ({ memory, env, args }) => {
             for (let item of items) {
                 let itemSize = dirent_t.size + item.name.length;
                 if (bufLen < itemSize) {
-                    bufPtr += bufLen;
                     break;
                 }
                 let dirent = dirent_t.get(memory.buffer, bufPtr);
@@ -347,7 +346,7 @@ module.exports = ({ memory, env, args }) => {
                 dirent.nameLen = item.name.length;
                 dirent.type = item.isDirectory() ? 'directory' : 'regularFile';
                 string.set(memory.buffer, bufPtr + dirent_t.size, item.name);
-                bufPtr += itemSize;
+                bufPtr = (bufPtr + itemSize);
                 bufLen -= itemSize;
             }
             size_t.set(memory.buffer, bufUsedPtr, bufPtr - initialBufPtr);

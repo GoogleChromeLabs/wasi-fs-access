@@ -7,18 +7,22 @@ import { randomFill as _randomFill } from 'crypto';
 
 const randomFill = promisify(_randomFill);
 
+type ptr<T> = number & { _pointerTarget: T };
+
 interface TypeInfo {
   size: number;
   align: number;
 }
 
 interface ReadableType<T> extends TypeInfo {
-  get(buf: ArrayBuffer, ptr: number): T;
+  get(buf: ArrayBuffer, ptr: ptr<T>): T;
 }
 
 interface WritableType<T> extends ReadableType<T> {
-  set(buf: ArrayBuffer, ptr: number, value: T): void;
+  set(buf: ArrayBuffer, ptr: ptr<T>, value: T): void;
 }
+
+type TargetType<I> = I extends ReadableType<infer T> ? T : never;
 
 const getDataView = (() => {
   const cache = new WeakMap<ArrayBuffer, DataView>();
@@ -54,12 +58,12 @@ const string = (() => {
   const textDecoder = new TextDecoder();
 
   return {
-    get(buf: ArrayBuffer, ptr: number, len: number) {
+    get(buf: ArrayBuffer, ptr: ptr<string>, len: number) {
       return textDecoder.decode(new Uint8Array(buf, ptr, len));
     },
     set(
       buf: ArrayBuffer,
-      ptr: number,
+      ptr: ptr<string>,
       value: string,
       len: number = value.length
     ) {
@@ -74,7 +78,7 @@ const string = (() => {
   };
 })();
 
-function alignTo(ptr: number, align: number) {
+function alignTo(ptr: number, align: number): number {
   let mismatch = ptr % align;
   if (mismatch) {
     ptr += align - mismatch;
@@ -100,10 +104,10 @@ function struct<T extends Record<string, WritableType<any>>>(
     const fieldOffset = offset;
     Object.defineProperty(Ctor.prototype, name, {
       get(this: Ctor) {
-        return type.get(this._buf, this._ptr + fieldOffset);
+        return type.get(this._buf, (this._ptr + fieldOffset) as ptr<any>);
       },
       set(this: Ctor, value) {
-        type.set(this._buf, this._ptr + fieldOffset, value);
+        type.set(this._buf, (this._ptr + fieldOffset) as ptr<any>, value);
       }
     });
     offset += type.size;
@@ -126,7 +130,7 @@ function enumer<E extends string>(desc: {
     size: desc.base.size,
     align: desc.base.align,
     get(buf, ptr) {
-      let id = desc.base.get(buf, ptr);
+      let id = desc.base.get(buf, ptr as any as ptr<number>);
       let name = desc.variants[id];
       if (name === undefined) {
         throw new TypeError(`Invalid ID ${id}.`);
@@ -138,7 +142,7 @@ function enumer<E extends string>(desc: {
       if (id === -1) {
         throw new TypeError(`Invalid variant ${value}.`);
       }
-      desc.base.set(buf, ptr, id);
+      desc.base.set(buf, ptr as any as ptr<number>, id);
     }
   };
 }
@@ -163,6 +167,7 @@ const prestat_t = struct({
   type: preopentype_t,
   nameLen: size_t
 });
+type prestat_t = TargetType<typeof prestat_t>;
 
 type fd_t = number & { _name: 'fd' };
 const fd_t = uint32_t as WritableType<fd_t>;
@@ -171,6 +176,7 @@ const iovec_t = struct({
   bufPtr: uint32_t,
   bufLen: size_t
 });
+type iovec_t = TargetType<typeof iovec_t>;
 
 const filetype_t = enumer({
   base: uint8_t,
@@ -196,6 +202,7 @@ const fdstat_t = struct({
   rightsBase: rights_t,
   rightsInheriting: rights_t
 });
+type fdstat_t = TargetType<typeof fdstat_t>;
 
 const dircookie_t = uint64_t;
 
@@ -207,6 +214,7 @@ const dirent_t = struct({
   nameLen: uint32_t,
   type: filetype_t
 });
+type dirent_t = TargetType<typeof dirent_t>;
 
 const device_t = uint64_t;
 
@@ -226,6 +234,7 @@ const filestat_t = struct({
   modTime: timestamp_t,
   changeTime: timestamp_t
 });
+type filestat_t = TargetType<typeof filestat_t>;
 
 const PREOPEN = '/sandbox';
 
@@ -279,7 +288,7 @@ module.exports = ({
     };
   })();
 
-  function resolvePath(dirFd: fd_t, pathPtr: number, pathLen: number): string {
+  function resolvePath(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number): string {
     return path.resolve(
       openFiles.get(dirFd).path,
       string.get(memory.buffer, pathPtr, pathLen)
@@ -287,9 +296,9 @@ module.exports = ({
   }
 
   async function forEachIoVec(
-    iovsPtr: number,
+    iovsPtr: ptr<iovec_t>,
     iovsLen: number,
-    handledPtr: number,
+    handledPtr: ptr<number>,
     cb: (buf: Uint8Array) => Promise<number>
   ) {
     let totalHandled = 0;
@@ -301,7 +310,7 @@ module.exports = ({
       if (handled < iovec.bufLen) {
         break;
       }
-      iovsPtr += iovec_t.size;
+      iovsPtr = (iovsPtr + iovec_t.size) as ptr<iovec_t>;
     }
     size_t.set(memory.buffer, handledPtr, totalHandled);
   }
@@ -344,7 +353,7 @@ module.exports = ({
   let stderr = new StdOut(console.error);
 
   return {
-    fd_prestat_get(fd: fd_t, prestatPtr: number) {
+    fd_prestat_get(fd: fd_t, prestatPtr: ptr<prestat_t>) {
       if (fd !== PREOPEN_FD) {
         return E.BADF;
       }
@@ -352,27 +361,27 @@ module.exports = ({
       prestat.type = 'dir';
       prestat.nameLen = PREOPEN.length;
     },
-    fd_prestat_dir_name(fd: fd_t, pathPtr: number, pathLen: number) {
+    fd_prestat_dir_name(fd: fd_t, pathPtr: ptr<string>, pathLen: number) {
       if (fd != PREOPEN_FD) {
         return E.BADF;
       }
       string.set(memory.buffer, pathPtr, PREOPEN, pathLen);
     },
-    environ_sizes_get(countPtr: number, sizePtr: number) {
+    environ_sizes_get(countPtr: ptr<number>, sizePtr: ptr<number>) {
       size_t.set(memory.buffer, countPtr, envOffsets.length);
       size_t.set(memory.buffer, sizePtr, envBuf.length);
     },
-    environ_get(environPtr: number, environBufPtr: number) {
+    environ_get(environPtr: ptr<Uint32Array>, environBufPtr: ptr<string>) {
       new Uint32Array(memory.buffer, environPtr, envOffsets.length).set(
         envOffsets.map(offset => environBufPtr + offset)
       );
       string.set(memory.buffer, environBufPtr, envBuf);
     },
-    args_sizes_get(argcPtr: number, argvBufSizePtr: number) {
+    args_sizes_get(argcPtr: ptr<number>, argvBufSizePtr: ptr<number>) {
       size_t.set(memory.buffer, argcPtr, argOffsets.length);
       size_t.set(memory.buffer, argvBufSizePtr, argBuf.length);
     },
-    args_get(argvPtr: number, argvBufPtr: number) {
+    args_get(argvPtr: ptr<Uint32Array>, argvBufPtr: ptr<string>) {
       new Uint32Array(memory.buffer, argvPtr, argOffsets.length).set(
         argOffsets.map(offset => argvBufPtr + offset)
       );
@@ -381,19 +390,19 @@ module.exports = ({
     proc_exit(code: number) {
       process.exit(code);
     },
-    random_get(bufPtr: number, bufLen: number) {
+    random_get(bufPtr: ptr<Uint8Array>, bufLen: number) {
       return randomFill(new Uint8Array(memory.buffer, bufPtr, bufLen));
     },
     async path_open(
       dirFd: fd_t,
       dirFlags: number,
-      pathPtr: number,
+      pathPtr: ptr<string>,
       pathLen: number,
       oFlags: any,
       fsRightsBase: bigint,
       fsRightsInheriting: bigint,
       fsFlags: any,
-      fdPtr: number
+      fdPtr: ptr<fd_t>
     ) {
       fd_t.set(
         memory.buffer,
@@ -406,9 +415,9 @@ module.exports = ({
     },
     async fd_read(
       fd: fd_t,
-      iovsPtr: number,
+      iovsPtr: ptr<iovec_t>,
       iovsLen: number,
-      nreadPtr: number
+      nreadPtr: ptr<number>
     ) {
       let { handle } = openFiles.get(fd);
       await forEachIoVec(
@@ -420,9 +429,9 @@ module.exports = ({
     },
     async fd_write(
       fd: fd_t,
-      iovsPtr: number,
+      iovsPtr: ptr<iovec_t>,
       iovsLen: number,
-      nwrittenPtr: number
+      nwrittenPtr: ptr<number>
     ) {
       let write: (data: Uint8Array) => Promise<number>;
       switch (fd) {
@@ -442,7 +451,7 @@ module.exports = ({
       }
       await forEachIoVec(iovsPtr, iovsLen, nwrittenPtr, write);
     },
-    async fd_fdstat_get(fd: fd_t, fdstatPtr: number) {
+    async fd_fdstat_get(fd: fd_t, fdstatPtr: ptr<fdstat_t>) {
       let fdstat = fdstat_t.get(memory.buffer, fdstatPtr);
       fdstat.filetype = (await openFiles.get(fd).handle.stat()).isDirectory()
         ? 'directory'
@@ -451,15 +460,15 @@ module.exports = ({
       fdstat.rightsBase = -1n;
       fdstat.rightsInheriting = -1n;
     },
-    path_create_directory(dirFd: fd_t, pathPtr: number, pathLen: number) {
+    path_create_directory(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) {
       return fsp.mkdir(resolvePath(dirFd, pathPtr, pathLen));
     },
     async path_rename(
       oldDirFd: fd_t,
-      oldPathPtr: number,
+      oldPathPtr: ptr<string>,
       oldPathLen: number,
       newDirFd: fd_t,
-      newPathPtr: number,
+      newPathPtr: ptr<string>,
       newPathLen: number
     ) {
       return fsp.rename(
@@ -467,15 +476,15 @@ module.exports = ({
         resolvePath(newDirFd, newPathPtr, newPathLen)
       );
     },
-    async path_remove_directory(dirFd: fd_t, pathPtr: number, pathLen: number) {
+    async path_remove_directory(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) {
       fsp.rmdir(resolvePath(dirFd, pathPtr, pathLen));
     },
     async fd_readdir(
       fd: fd_t,
-      bufPtr: number,
+      bufPtr: ptr<dirent_t>,
       bufLen: number,
       cookie: bigint,
-      bufUsedPtr: number
+      bufUsedPtr: ptr<number>
     ) {
       const initialBufPtr = bufPtr;
       let items = (
@@ -484,7 +493,6 @@ module.exports = ({
       for (let item of items) {
         let itemSize = dirent_t.size + item.name.length;
         if (bufLen < itemSize) {
-          bufPtr += bufLen;
           break;
         }
         let dirent = dirent_t.get(memory.buffer, bufPtr);
@@ -492,8 +500,8 @@ module.exports = ({
         dirent.ino = 0n; // TODO
         dirent.nameLen = item.name.length;
         dirent.type = item.isDirectory() ? 'directory' : 'regularFile';
-        string.set(memory.buffer, bufPtr + dirent_t.size, item.name);
-        bufPtr += itemSize;
+        string.set(memory.buffer, bufPtr + dirent_t.size as ptr<string>, item.name);
+        bufPtr = (bufPtr + itemSize) as ptr<dirent_t>;
         bufLen -= itemSize;
       }
       size_t.set(memory.buffer, bufUsedPtr, bufPtr - initialBufPtr);
@@ -509,9 +517,9 @@ module.exports = ({
     async path_filestat_get(
       dirFd: fd_t,
       flags: any,
-      pathPtr: number,
+      pathPtr: ptr<string>,
       pathLen: number,
-      filestatPtr: number
+      filestatPtr: ptr<filestat_t>
     ) {
       let path = resolvePath(dirFd, pathPtr, pathLen);
       let info = await (fsp.stat as any)(path, { bigint: true });
