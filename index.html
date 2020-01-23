@@ -1,5 +1,68 @@
+<input value="Open dir" id="openDir" type="button" />
+<link rel="stylesheet" href="node_modules/xterm/css/xterm.css" />
+<script src="node_modules/xterm/lib/xterm.js"></script>
+<div id="terminal"></div>
 <script type="module">
-import createBindings from './browser-bindings.js';
+import createBindings, { EXIT } from './bindings.js';
+import * as Asyncify from './node_modules/asyncify-wasm/dist/asyncify.mjs';
 
+let wasmModule = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
 
+document.getElementById('openDir').addEventListener('click', async () => {
+	let rootHandle = await chooseFileSystemEntries({ type: 'openDirectory' });
+
+	var term = new Terminal();
+	term.open(document.getElementById('terminal'));
+	function prompt() {
+		term.write('$ ');
+	}
+	prompt();
+
+	let args = '';
+	term.onKey(async e => {
+		const printable = !e.domEvent.altKey && !e.domEvent.altGraphKey && !e.domEvent.ctrlKey && !e.domEvent.metaKey;
+
+		if (e.domEvent.keyCode === 13) {
+			term.writeln('');
+			let realMemory;
+			let memoryWrapper = {
+				get buffer() {
+					return realMemory.buffer;
+				}
+			};
+			let writeOut = async (data) => {
+				let startIndex = 0;
+				let newLine;
+				while ((newLine = data.indexOf(10, startIndex)) !== -1) {
+					await new Promise(resolve => term.writeln(data.subarray(startIndex, newLine), resolve));
+					startIndex = newLine + 1;
+				}
+				await new Promise(resolve => term.write(data.subarray(startIndex), resolve));
+			};
+			let instance = await Asyncify.instantiate(await wasmModule, {
+				wasi_unstable: createBindings({
+					rootHandle,
+					memory: memoryWrapper,
+					env: {},
+					args: args.split(' '),
+					writeOut,
+					writeErr: writeOut
+				})
+			});
+			args = '';
+			realMemory = instance.exports.memory;
+			try {
+				await instance.exports._start();
+			} catch (e) {
+				if (e !== EXIT) {
+					term.writeln(e.message);
+				}
+			}
+			prompt();
+		} else if (printable) {
+			term.write(e.key);
+			args += e.key;
+		}
+	});
+});
 </script>

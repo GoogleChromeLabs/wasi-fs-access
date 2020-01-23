@@ -19,7 +19,8 @@
   "homepage": "https://github.com/RReverser/native-fs-wasi#readme",
   "description": "",
   "dependencies": {
-    "asyncify-wasm": "^1.0.2"
+    "asyncify-wasm": "^1.0.2",
+    "xterm": "^4.3.0"
   },
   "devDependencies": {
     "@types/node": "^13.1.8",

@@ -4,6 +4,6 @@
 		"strict": true,
 		"target": "ESNext",
 		"moduleResolution": "Node",
-		"module": "CommonJS"
+		"module": "ESNext"
 	}
 }
