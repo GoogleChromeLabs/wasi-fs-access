@@ -19,7 +19,7 @@ let bindings = createBindings({
 });
 
 (async () => {
-  let buf = await fs.readFile('uutils.wasm');
+  let buf = await fs.readFile('uutils.async.wasm');
 
   let cache = new WeakMap();
 
@@ -32,8 +32,8 @@ let bindings = createBindings({
 			}
 			let wrapped = cache.get(orig);
 			if (wrapped === undefined) {
-				wrapped = (...args) => {
-					let res = orig.apply(this, args);
+				wrapped = async (...args) => {
+					let res = await orig.apply(this, args);
 					// if (name === 'args_sizes_get') {
 					// 	args[0] = new Uint32Array(instance.exports.memory.buffer, args[0], 1)[0];
 					// 	args[1] = new Uint32Array(instance.exports.memory.buffer, args[1], 1)[0];
@@ -62,5 +62,5 @@ let bindings = createBindings({
 
   realMemory = instance.exports.memory;
 
-  instance.exports._start();
+  await instance.exports._start();
 })();

@@ -1,7 +1,10 @@
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
-const fs = require("fs");
+const fs_1 = require("fs");
 const path = require("path");
+const util_1 = require("util");
+const crypto_1 = require("crypto");
+const randomFill = util_1.promisify(crypto_1.randomFill);
 const getDataView = (() => {
     const cache = new WeakMap();
     return (buf) => {
@@ -174,39 +177,11 @@ const PREOPEN_FD = 3;
 module.exports = ({ memory, env, args }) => {
     const openFiles = (() => {
         let nextFd = PREOPEN_FD;
-        let openFiles = new Map([
-            [
-                0,
-                {
-                    realFd: 0,
-                    get path() {
-                        throw new Error('Tried to resolve path relatively to stdin.');
-                    }
-                }
-            ],
-            [
-                1,
-                {
-                    realFd: 1,
-                    get path() {
-                        throw new Error('Tried to resolve path relatively to stdout.');
-                    }
-                }
-            ],
-            [
-                2,
-                {
-                    realFd: 2,
-                    get path() {
-                        throw new Error('Tried to resolve path relatively to stderr.');
-                    }
-                }
-            ]
-        ]);
-        function open(path) {
+        let openFiles = new Map();
+        async function open(path) {
             openFiles.set(nextFd, {
                 path,
-                realFd: fs.openSync(path, 0)
+                handle: await fs_1.promises.open(path, 'r')
             });
             return nextFd++;
         }
@@ -230,13 +205,12 @@ module.exports = ({ memory, env, args }) => {
     function resolvePath(dirFd, pathPtr, pathLen) {
         return path.resolve(openFiles.get(dirFd).path, string.get(memory.buffer, pathPtr, pathLen));
     }
-    function forEachIoVec(fd, iovsPtr, iovsLen, handledPtr, cb) {
-        let { realFd } = openFiles.get(fd);
+    async function forEachIoVec(iovsPtr, iovsLen, handledPtr, cb) {
         let totalHandled = 0;
         for (let i = 0; i < iovsLen; i++) {
             let iovec = iovec_t.get(memory.buffer, iovsPtr);
             let buf = new Uint8Array(memory.buffer, iovec.bufPtr, iovec.bufLen);
-            let handled = cb(realFd, buf, 0, buf.length, null);
+            let handled = await cb(buf);
             totalHandled += handled;
             if (handled < iovec.bufLen) {
                 break;
@@ -257,6 +231,23 @@ module.exports = ({ memory, env, args }) => {
         argOffsets.push(argBuf.length);
         argBuf += `${arg}\0`;
     }
+    class StdOut {
+        constructor(_method) {
+            this._method = _method;
+            this._buffer = '';
+            this._decoder = new TextDecoder();
+        }
+        async write(data) {
+            let lines = (this._buffer + this._decoder.decode(data, { stream: true })).split('\n');
+            this._buffer = lines.pop();
+            for (let line of lines) {
+                this._method(line);
+            }
+            return data.length;
+        }
+    }
+    let stdout = new StdOut(console.log);
+    let stderr = new StdOut(console.error);
     return {
         fd_prestat_get(fd, prestatPtr) {
             if (fd !== PREOPEN_FD) {
@@ -292,23 +283,40 @@ module.exports = ({ memory, env, args }) => {
             process.exit(code);
         },
         random_get(bufPtr, bufLen) {
-            require('crypto').randomFillSync(new Uint8Array(memory.buffer, bufPtr, bufLen));
+            return randomFill(new Uint8Array(memory.buffer, bufPtr, bufLen));
         },
-        path_open(dirFd, dirFlags, pathPtr, pathLen, oFlags, fsRightsBase, fsRightsInheriting, fsFlags, fdPtr) {
-            fd_t.set(memory.buffer, fdPtr, openFiles.open(resolvePath(dirFd, pathPtr, pathLen)));
+        async path_open(dirFd, dirFlags, pathPtr, pathLen, oFlags, fsRightsBase, fsRightsInheriting, fsFlags, fdPtr) {
+            fd_t.set(memory.buffer, fdPtr, await openFiles.open(resolvePath(dirFd, pathPtr, pathLen)));
         },
         fd_close(fd) {
             openFiles.close(fd);
         },
-        fd_read(fd, iovsPtr, iovsLen, nreadPtr) {
-            forEachIoVec(fd, iovsPtr, iovsLen, nreadPtr, fs.readSync);
+        async fd_read(fd, iovsPtr, iovsLen, nreadPtr) {
+            let { handle } = openFiles.get(fd);
+            await forEachIoVec(iovsPtr, iovsLen, nreadPtr, async (buf) => (await handle.read(buf, 0, buf.length)).bytesRead);
         },
-        fd_write(fd, iovsPtr, iovsLen, nwrittenPtr) {
-            forEachIoVec(fd, iovsPtr, iovsLen, nwrittenPtr, fs.writeSync);
+        async fd_write(fd, iovsPtr, iovsLen, nwrittenPtr) {
+            let write;
+            switch (fd) {
+                case 1: {
+                    write = data => stdout.write(data);
+                    break;
+                }
+                case 2: {
+                    write = data => stderr.write(data);
+                    break;
+                }
+                default: {
+                    let { handle } = openFiles.get(fd);
+                    write = async (data) => (await handle.write(data)).bytesWritten;
+                    break;
+                }
+            }
+            await forEachIoVec(iovsPtr, iovsLen, nwrittenPtr, write);
         },
-        fd_fdstat_get(fd, fdstatPtr) {
+        async fd_fdstat_get(fd, fdstatPtr) {
             let fdstat = fdstat_t.get(memory.buffer, fdstatPtr);
-            fdstat.filetype = fs.fstatSync(openFiles.get(fd).realFd).isDirectory()
+            fdstat.filetype = (await openFiles.get(fd).handle.stat()).isDirectory()
                 ? 'directory'
                 : 'regularFile';
             fdstat.flags = 0;
@@ -316,19 +324,17 @@ module.exports = ({ memory, env, args }) => {
             fdstat.rightsInheriting = -1n;
         },
         path_create_directory(dirFd, pathPtr, pathLen) {
-            fs.mkdirSync(resolvePath(dirFd, pathPtr, pathLen));
+            return fs_1.promises.mkdir(resolvePath(dirFd, pathPtr, pathLen));
         },
-        path_rename(oldDirFd, oldPathPtr, oldPathLen, newDirFd, newPathPtr, newPathLen) {
-            fs.renameSync(resolvePath(oldDirFd, oldPathPtr, oldPathLen), resolvePath(newDirFd, newPathPtr, newPathLen));
+        async path_rename(oldDirFd, oldPathPtr, oldPathLen, newDirFd, newPathPtr, newPathLen) {
+            return fs_1.promises.rename(resolvePath(oldDirFd, oldPathPtr, oldPathLen), resolvePath(newDirFd, newPathPtr, newPathLen));
         },
-        path_remove_directory(dirFd, pathPtr, pathLen) {
-            fs.rmdirSync(resolvePath(dirFd, pathPtr, pathLen));
+        async path_remove_directory(dirFd, pathPtr, pathLen) {
+            fs_1.promises.rmdir(resolvePath(dirFd, pathPtr, pathLen));
         },
-        fd_readdir(fd, bufPtr, bufLen, cookie, bufUsedPtr) {
+        async fd_readdir(fd, bufPtr, bufLen, cookie, bufUsedPtr) {
             const initialBufPtr = bufPtr;
-            let items = fs
-                .readdirSync(openFiles.get(fd).path, { withFileTypes: true })
-                .slice(Number(cookie));
+            let items = (await fs_1.promises.readdir(openFiles.get(fd).path, { withFileTypes: true })).slice(Number(cookie));
             for (let item of items) {
                 let itemSize = dirent_t.size + item.name.length;
                 if (bufLen < itemSize) {
@@ -347,9 +353,9 @@ module.exports = ({ memory, env, args }) => {
             size_t.set(memory.buffer, bufUsedPtr, bufPtr - initialBufPtr);
         },
         path_readlink(dirFd, pathPtr, pathLen, bufPtr, bufLen, bufUsedPtr) { },
-        path_filestat_get(dirFd, flags, pathPtr, pathLen, filestatPtr) {
+        async path_filestat_get(dirFd, flags, pathPtr, pathLen, filestatPtr) {
             let path = resolvePath(dirFd, pathPtr, pathLen);
-            let info = fs.statSync(path, { bigint: true });
+            let info = await fs_1.promises.stat(path, { bigint: true });
             let filestat = filestat_t.get(memory.buffer, filestatPtr);
             filestat.dev = 0n;
             filestat.ino = 0n; // TODO
