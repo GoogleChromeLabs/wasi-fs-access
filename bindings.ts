@@ -160,7 +160,8 @@ const prestat_t = struct({
   nameLen: size_t
 });
 
-const fd_t = uint32_t;
+type fd_t = number & { _name: 'fd' };
+const fd_t = uint32_t as WritableType<fd_t>;
 
 const iovec_t = struct({
   bufPtr: uint32_t,
@@ -229,7 +230,7 @@ const enum E {
   BADF = 8
 }
 
-const PREOPEN_FD = 3;
+const PREOPEN_FD = 3 as fd_t;
 
 module.exports = ({
   memory,
@@ -241,33 +242,33 @@ module.exports = ({
   args: string[];
 }) => {
   const openFiles = (() => {
-    let nextFd = PREOPEN_FD;
+    let nextFd: fd_t = PREOPEN_FD;
 
-    type OpenFile = { fd: number; path: string | never };
+    type OpenFile = { realFd: number; path: string | never };
 
-    let openFiles = new Map<number, OpenFile>([
+    let openFiles = new Map<fd_t, OpenFile>([
       [
-        0,
+        0 as fd_t,
         {
-          fd: 0,
+          realFd: 0,
           get path(): never {
             throw new Error('Tried to resolve path relatively to stdin.');
           }
         }
       ],
       [
-        1,
+        1 as fd_t,
         {
-          fd: 1,
+          realFd: 1,
           get path(): never {
             throw new Error('Tried to resolve path relatively to stdout.');
           }
         }
       ],
       [
-        2,
+        2 as fd_t,
         {
-          fd: 2,
+          realFd: 2,
           get path(): never {
             throw new Error('Tried to resolve path relatively to stderr.');
           }
@@ -278,23 +279,23 @@ module.exports = ({
     function open(path: string) {
       openFiles.set(nextFd, {
         path,
-        fd: fs.openSync(path, 0)
+        realFd: fs.openSync(path, 0)
       });
-      return nextFd++;
+      return nextFd++ as fd_t;
     }
 
     open('.');
 
     return {
       open,
-      get(fd: number): OpenFile {
+      get(fd: fd_t): OpenFile {
         let file = openFiles.get(fd);
         if (!file) {
           throw new Error('Tried to retrieve a non-existing file.');
         }
         return file;
       },
-      close(fd: number) {
+      close(fd: fd_t) {
         if (!openFiles.delete(fd)) {
           throw new Error('Tried to close a non-existing file.');
         }
@@ -303,7 +304,7 @@ module.exports = ({
   })();
 
   function resolvePath(
-    dirFd: number,
+    dirFd: fd_t,
     pathPtr: number,
     pathLen: number
   ): string {
@@ -314,7 +315,7 @@ module.exports = ({
   }
 
   function forEachIoVec(
-    fd: number,
+    fd: fd_t,
     iovsPtr: number,
     iovsLen: number,
     handledPtr: number,
@@ -326,12 +327,12 @@ module.exports = ({
       position: null
     ) => number
   ) {
-    fd = openFiles.get(fd).fd;
+    let {realFd} = openFiles.get(fd);
     let totalHandled = 0;
     for (let i = 0; i < iovsLen; i++) {
       let iovec = iovec_t.get(memory.buffer, iovsPtr);
       let buf = new Uint8Array(memory.buffer, iovec.bufPtr, iovec.bufLen);
-      let handled = cb(fd, buf, 0, buf.length, null);
+      let handled = cb(realFd, buf, 0, buf.length, null);
       totalHandled += handled;
       if (handled < iovec.bufLen) {
         break;
@@ -358,7 +359,7 @@ module.exports = ({
   }
 
   return {
-    fd_prestat_get(fd: number, prestatPtr: number) {
+    fd_prestat_get(fd: fd_t, prestatPtr: number) {
       if (fd !== PREOPEN_FD) {
         return E.BADF;
       }
@@ -366,7 +367,7 @@ module.exports = ({
       prestat.type = 'dir';
       prestat.nameLen = PREOPEN.length;
     },
-    fd_prestat_dir_name(fd: number, pathPtr: number, pathLen: number) {
+    fd_prestat_dir_name(fd: fd_t, pathPtr: number, pathLen: number) {
       if (fd != PREOPEN_FD) {
         return E.BADF;
       }
@@ -401,7 +402,7 @@ module.exports = ({
       );
     },
     path_open(
-      dirFd: number,
+      dirFd: fd_t,
       dirFlags: number,
       pathPtr: number,
       pathLen: number,
@@ -417,37 +418,37 @@ module.exports = ({
         openFiles.open(resolvePath(dirFd, pathPtr, pathLen))
       );
     },
-    fd_close(fd: number) {
+    fd_close(fd: fd_t) {
       openFiles.close(fd);
     },
-    fd_read(fd: number, iovsPtr: number, iovsLen: number, nreadPtr: number) {
+    fd_read(fd: fd_t, iovsPtr: number, iovsLen: number, nreadPtr: number) {
       forEachIoVec(fd, iovsPtr, iovsLen, nreadPtr, fs.readSync);
     },
     fd_write(
-      fd: number,
+      fd: fd_t,
       iovsPtr: number,
       iovsLen: number,
       nwrittenPtr: number
     ) {
       forEachIoVec(fd, iovsPtr, iovsLen, nwrittenPtr, fs.writeSync);
     },
-    fd_fdstat_get(fd: number, fdstatPtr: number) {
+    fd_fdstat_get(fd: fd_t, fdstatPtr: number) {
       let fdstat = fdstat_t.get(memory.buffer, fdstatPtr);
-      fdstat.filetype = fs.fstatSync(openFiles.get(fd).fd).isDirectory()
+      fdstat.filetype = fs.fstatSync(openFiles.get(fd).realFd).isDirectory()
         ? 'directory'
         : 'regularFile';
       fdstat.flags = 0;
       fdstat.rightsBase = -1n;
       fdstat.rightsInheriting = -1n;
     },
-    path_create_directory(dirFd: number, pathPtr: number, pathLen: number) {
+    path_create_directory(dirFd: fd_t, pathPtr: number, pathLen: number) {
       fs.mkdirSync(resolvePath(dirFd, pathPtr, pathLen));
     },
     path_rename(
-      oldDirFd: number,
+      oldDirFd: fd_t,
       oldPathPtr: number,
       oldPathLen: number,
-      newDirFd: number,
+      newDirFd: fd_t,
       newPathPtr: number,
       newPathLen: number
     ) {
@@ -456,11 +457,11 @@ module.exports = ({
         resolvePath(newDirFd, newPathPtr, newPathLen)
       );
     },
-    path_remove_directory(dirFd: number, pathPtr: number, pathLen: number) {
+    path_remove_directory(dirFd: fd_t, pathPtr: number, pathLen: number) {
       fs.rmdirSync(resolvePath(dirFd, pathPtr, pathLen));
     },
     fd_readdir(
-      fd: number,
+      fd: fd_t,
       bufPtr: number,
       bufLen: number,
       cookie: bigint,
@@ -488,7 +489,7 @@ module.exports = ({
       size_t.set(memory.buffer, bufUsedPtr, bufPtr - initialBufPtr);
     },
     path_readlink(
-      dirFd: number,
+      dirFd: fd_t,
       pathPtr: number,
       pathLen: number,
       bufPtr: number,
@@ -496,7 +497,7 @@ module.exports = ({
       bufUsedPtr: number
     ) {},
     path_filestat_get(
-      dirFd: number,
+      dirFd: fd_t,
       flags: any,
       pathPtr: number,
       pathLen: number,
@@ -515,6 +516,6 @@ module.exports = ({
       filestat.modTime = (info.mtimeNs as any) as bigint;
       filestat.changeTime = (info.ctimeNs as any) as bigint;
     },
-    fd_seek(fd: number, offset: bigint, whence: number, filesizePtr: number) {}
+    fd_seek(fd: fd_t, offset: bigint, whence: number, filesizePtr: number) {}
   };
 };

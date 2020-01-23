@@ -178,7 +178,7 @@ module.exports = ({ memory, env, args }) => {
             [
                 0,
                 {
-                    fd: 0,
+                    realFd: 0,
                     get path() {
                         throw new Error('Tried to resolve path relatively to stdin.');
                     }
@@ -187,7 +187,7 @@ module.exports = ({ memory, env, args }) => {
             [
                 1,
                 {
-                    fd: 1,
+                    realFd: 1,
                     get path() {
                         throw new Error('Tried to resolve path relatively to stdout.');
                     }
@@ -196,7 +196,7 @@ module.exports = ({ memory, env, args }) => {
             [
                 2,
                 {
-                    fd: 2,
+                    realFd: 2,
                     get path() {
                         throw new Error('Tried to resolve path relatively to stderr.');
                     }
@@ -206,7 +206,7 @@ module.exports = ({ memory, env, args }) => {
         function open(path) {
             openFiles.set(nextFd, {
                 path,
-                fd: fs.openSync(path, 0)
+                realFd: fs.openSync(path, 0)
             });
             return nextFd++;
         }
@@ -231,12 +231,12 @@ module.exports = ({ memory, env, args }) => {
         return path.resolve(openFiles.get(dirFd).path, string.get(memory.buffer, pathPtr, pathLen));
     }
     function forEachIoVec(fd, iovsPtr, iovsLen, handledPtr, cb) {
-        fd = openFiles.get(fd).fd;
+        let { realFd } = openFiles.get(fd);
         let totalHandled = 0;
         for (let i = 0; i < iovsLen; i++) {
             let iovec = iovec_t.get(memory.buffer, iovsPtr);
             let buf = new Uint8Array(memory.buffer, iovec.bufPtr, iovec.bufLen);
-            let handled = cb(fd, buf, 0, buf.length, null);
+            let handled = cb(realFd, buf, 0, buf.length, null);
             totalHandled += handled;
             if (handled < iovec.bufLen) {
                 break;
@@ -308,7 +308,7 @@ module.exports = ({ memory, env, args }) => {
         },
         fd_fdstat_get(fd, fdstatPtr) {
             let fdstat = fdstat_t.get(memory.buffer, fdstatPtr);
-            fdstat.filetype = fs.fstatSync(openFiles.get(fd).fd).isDirectory()
+            fdstat.filetype = fs.fstatSync(openFiles.get(fd).realFd).isDirectory()
                 ? 'directory'
                 : 'regularFile';
             fdstat.flags = 0;
