@@ -1,4 +1,4 @@
-'use strict';
+import { OpenFiles, PREOPEN_FD, PREOPEN } from './fileSystem.js';
 
 type ptr<T> = number & { _pointerTarget: T };
 
@@ -125,7 +125,7 @@ function enumer<E extends string>(desc: {
     size: desc.base.size,
     align: desc.base.align,
     get(buf, ptr) {
-      let id = desc.base.get(buf, ptr as any as ptr<number>);
+      let id = desc.base.get(buf, (ptr as any) as ptr<number>);
       let name = desc.variants[id];
       if (name === undefined) {
         throw new TypeError(`Invalid ID ${id}.`);
@@ -137,7 +137,7 @@ function enumer<E extends string>(desc: {
       if (id === -1) {
         throw new TypeError(`Invalid variant ${value}.`);
       }
-      desc.base.set(buf, ptr as any as ptr<number>, id);
+      desc.base.set(buf, (ptr as any) as ptr<number>, id);
     }
   };
 }
@@ -164,8 +164,8 @@ const prestat_t = struct({
 });
 type prestat_t = TargetType<typeof prestat_t>;
 
-type fd_t = number & { _name: 'fd' };
-const fd_t = uint32_t as WritableType<fd_t>;
+export type fd_t = number & { _name: 'fd' };
+export const fd_t = uint32_t as WritableType<fd_t>;
 
 const iovec_t = struct({
   bufPtr: uint32_t,
@@ -231,106 +231,369 @@ const filestat_t = struct({
 });
 type filestat_t = TargetType<typeof filestat_t>;
 
-const PREOPEN = '/';
-
 const enum E {
-  SUCCESS = 0,
-  BADF = 8
+  BADF = 8,
+  ISDIR = 31,
+  NOSYS = 52,
+  NOTDIR = 54
 }
 
-const PREOPEN_FD = 3 as fd_t;
+interface Out {
+  write(data: Uint8Array): void | Promise<void>;
+}
 
-export default ({
-  rootHandle,
-  memory,
-  env,
-  args,
-  writeOut,
-  writeErr,
-}: {
-  rootHandle: FileSystemDirectoryHandle,
-  memory: WebAssembly.Memory;
-  env: Record<string, string>;
-  args: string[];
-  writeOut?: (data: Uint8Array) => Promise<void>;
-  writeErr?: (data: Uint8Array) => Promise<void>;
-}) => {
-  const openFiles = (() => {
-    type OpenFile = { handle: FileSystemHandle, path: string, position: number };
+class StdOut {
+  private _buffer = '';
+  private _decoder = new TextDecoder();
 
-    let openFiles = new Map<fd_t, OpenFile>([
-      [PREOPEN_FD, { handle: rootHandle, path: '/', position: 0 }]
-    ]);
+  constructor(public writeLn: (line: string) => void) {}
 
-    let nextFd: fd_t = (PREOPEN_FD + 1) as fd_t;
+  write(data: Uint8Array) {
+    let lines = (
+      this._buffer + this._decoder.decode(data, { stream: true })
+    ).split('\n');
+    this._buffer = lines.pop()!;
+    for (let line of lines) {
+      this.writeLn(line);
+    }
+  }
+}
 
-    function getFileOrDir(path: string, mode: 'file', create: boolean): Promise<FileSystemFileHandle>;
-    function getFileOrDir(path: string, mode: 'dir', create: boolean): Promise<FileSystemDirectoryHandle>;
-    function getFileOrDir(path: string, mode: 'fileOrDir', create: boolean): Promise<FileSystemHandle>;
-    async function getFileOrDir(path: string, mode: 'file' | 'dir' | 'fileOrDir', create: boolean) {
-      if (!path.startsWith('/')) {
-        throw new Error('Non-absolute path.');
-      }
-      path = path.slice(1);
-      if (!path) {
-        if (mode !== 'file') {
-          return rootHandle;
-        } else {
-          throw new Error('Requested a file, but got root directory.');
-        }
-      }
-      let items = path.split('/');
-      let lastItem = items.pop()!;
-      let curDir = rootHandle;
-      for (let chunk of items) {
-        curDir = await curDir.getDirectory(chunk);
-      }
-      if (mode === 'file') {
-        return curDir.getFile(lastItem, { create });
-      } else if (mode === 'dir') {
-        return curDir.getDirectory(lastItem, { create });
-      } else {
-        try {
-          return await curDir.getFile(lastItem, { create });
-        } catch {
-          return curDir.getDirectory(lastItem, { create });
-        }
+export default class Bindings {
+  private _openFiles: OpenFiles;
+
+  private _argOffsets: Uint32Array;
+  private _argBuf: string;
+
+  private _envOffsets: Uint32Array;
+  private _envBuf: string;
+
+  private _stdOut: Out;
+  private _stdErr: Out;
+
+  constructor({
+    rootHandle,
+    stdout = new StdOut(console.log),
+    stderr = new StdOut(console.error),
+    args = [],
+    env = {}
+  }: {
+    rootHandle: FileSystemDirectoryHandle;
+    stdout?: Out;
+    stderr?: Out;
+    args?: string[];
+    env?: Record<string, string>;
+  }) {
+    this._openFiles = new OpenFiles(rootHandle);
+
+    // Set args.
+    {
+      this._argOffsets = new Uint32Array(args.length);
+      this._argBuf = '';
+      for (let [i, arg] of args.entries()) {
+        this._argOffsets[i] = this._argBuf.length;
+        this._argBuf += `${arg}\0`;
       }
     }
 
-    async function open(path: string) {
-      openFiles.set(nextFd, {
-        path,
-        handle: await getFileOrDir(path, 'fileOrDir', false),
-        position: 0,
-      });
-      return nextFd++ as fd_t;
+    // Set env.
+    {
+      let pairs = Object.entries(env);
+
+      this._envOffsets = new Uint32Array(pairs.length);
+      this._envBuf = '';
+
+      for (let [i, [key, value]] of pairs.entries()) {
+        this._envOffsets[i] = this._envBuf.length;
+        this._envBuf += `${key}=${value}\0`;
+      }
     }
 
+    this._stdOut = stdout;
+    this._stdErr = stderr;
+  }
+
+  memory: WebAssembly.Memory | undefined;
+
+  private _getBuffer() {
+    let { memory } = this;
+    if (!memory) {
+      throw new Error('Memory not yet initialised.');
+    }
+    return memory.buffer;
+  }
+
+  getWasiImports() {
     return {
-      open,
-      getFileOrDir,
-      get(fd: fd_t): OpenFile {
-        let file = openFiles.get(fd);
-        if (!file) {
-          throw new Error('Tried to retrieve a non-existing file.');
+      fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
+        if (fd !== PREOPEN_FD) {
+          return E.BADF;
         }
-        return file;
+        let prestat = prestat_t.get(this._getBuffer(), prestatPtr);
+        prestat.type = 'dir';
+        prestat.nameLen = PREOPEN.length;
       },
-      close(fd: fd_t) {
-        if (!openFiles.delete(fd)) {
-          throw new Error('Tried to close a non-existing file.');
+      fd_prestat_dir_name: (
+        fd: fd_t,
+        pathPtr: ptr<string>,
+        pathLen: number
+      ) => {
+        if (fd != PREOPEN_FD) {
+          return E.BADF;
         }
+        string.set(this._getBuffer(), pathPtr, PREOPEN, pathLen);
+      },
+      environ_sizes_get: (countPtr: ptr<number>, sizePtr: ptr<number>) => {
+        size_t.set(this._getBuffer(), countPtr, this._envOffsets.length);
+        size_t.set(this._getBuffer(), sizePtr, this._envBuf.length);
+      },
+      environ_get: (
+        environPtr: ptr<Uint32Array>,
+        environBufPtr: ptr<string>
+      ) => {
+        new Uint32Array(
+          this._getBuffer(),
+          environPtr,
+          this._envOffsets.length
+        ).set(this._envOffsets.map(offset => environBufPtr + offset));
+        string.set(this._getBuffer(), environBufPtr, this._envBuf);
+      },
+      args_sizes_get: (argcPtr: ptr<number>, argvBufSizePtr: ptr<number>) => {
+        size_t.set(this._getBuffer(), argcPtr, this._argOffsets.length);
+        size_t.set(this._getBuffer(), argvBufSizePtr, this._argBuf.length);
+      },
+      args_get: (argvPtr: ptr<Uint32Array>, argvBufPtr: ptr<string>) => {
+        new Uint32Array(
+          this._getBuffer(),
+          argvPtr,
+          this._argOffsets.length
+        ).set(this._argOffsets.map(offset => argvBufPtr + offset));
+        string.set(this._getBuffer(), argvBufPtr, this._argBuf);
+      },
+      proc_exit: (code: number) => {
+        if (code != 0) {
+          this._stdErr.write(
+            new TextEncoder().encode(`Exited with code ${code}.\n`)
+          );
+        }
+        throw EXIT;
+      },
+      random_get: (bufPtr: ptr<Uint8Array>, bufLen: number) => {
+        crypto.getRandomValues(
+          new Uint8Array(this._getBuffer(), bufPtr, bufLen)
+        );
+      },
+      path_open: async (
+        dirFd: fd_t,
+        dirFlags: number,
+        pathPtr: ptr<string>,
+        pathLen: number,
+        oFlags: any,
+        fsRightsBase: bigint,
+        fsRightsInheriting: bigint,
+        fsFlags: any,
+        fdPtr: ptr<fd_t>
+      ) => {
+        fd_t.set(
+          this._getBuffer(),
+          fdPtr,
+          await this._openFiles.open(this._resolvePath(dirFd, pathPtr, pathLen))
+        );
+      },
+      fd_close: (fd: fd_t) => {
+        this._openFiles.close(fd);
+      },
+      fd_read: async (
+        fd: fd_t,
+        iovsPtr: ptr<iovec_t>,
+        iovsLen: number,
+        nreadPtr: ptr<number>
+      ) => {
+        let openFile = this._openFiles.get(fd);
+        if (!openFile.handle.isFile) {
+          return E.ISDIR;
+        }
+        let file = await openFile.handle.getFile();
+        await this._forEachIoVec(iovsPtr, iovsLen, nreadPtr, async buf => {
+          let blob = file.slice(openFile.position, openFile.position + iovsLen);
+          buf.set(new Uint8Array(await (blob as any).arrayBuffer()));
+          openFile.position += blob.size;
+          return blob.size;
+        });
+      },
+      fd_write: async (
+        fd: fd_t,
+        iovsPtr: ptr<iovec_t>,
+        iovsLen: number,
+        nwrittenPtr: ptr<number>
+      ) => {
+        let write: (data: Uint8Array) => Promise<number>;
+        let close: (() => Promise<void>) | void;
+        switch (fd) {
+          case 1: {
+            write = async data => {
+              await this._stdOut.write(data);
+              return data.length;
+            };
+            break;
+          }
+          case 2: {
+            write = async data => {
+              await this._stdErr.write(data);
+              return data.length;
+            };
+            break;
+          }
+          default: {
+            let openFile = this._openFiles.get(fd);
+            if (!openFile.handle.isFile) {
+              return E.ISDIR;
+            }
+            let writer = await openFile.handle.createWriter({
+              keepExistingData: true
+            });
+            write = async data => {
+              await writer.write(openFile.position, data);
+              openFile.position += data.length;
+              return data.length;
+            };
+            close = () => writer.close();
+            break;
+          }
+        }
+        await this._forEachIoVec(iovsPtr, iovsLen, nwrittenPtr, write);
+        if (close) {
+          await close();
+        }
+      },
+      fd_fdstat_get: async (fd: fd_t, fdstatPtr: ptr<fdstat_t>) => {
+        let fdstat = fdstat_t.get(this._getBuffer(), fdstatPtr);
+        fdstat.filetype = this._openFiles.get(fd).handle.isDirectory
+          ? 'directory'
+          : 'regularFile';
+        fdstat.flags = 0;
+        fdstat.rightsBase = -1n;
+        fdstat.rightsInheriting = -1n;
+      },
+      path_create_directory: async (
+        dirFd: fd_t,
+        pathPtr: ptr<string>,
+        pathLen: number
+      ) => {
+        await this._openFiles.getFileOrDir(
+          this._resolvePath(dirFd, pathPtr, pathLen),
+          'dir',
+          true
+        );
+      },
+      path_rename: async (
+        oldDirFd: fd_t,
+        oldPathPtr: ptr<string>,
+        oldPathLen: number,
+        newDirFd: fd_t,
+        newPathPtr: ptr<string>,
+        newPathLen: number
+      ) => {
+        return E.NOSYS;
+      },
+      path_remove_directory: (
+        dirFd: fd_t,
+        pathPtr: ptr<string>,
+        pathLen: number
+      ) => {
+        return E.NOSYS;
+      },
+      fd_readdir: async (
+        fd: fd_t,
+        bufPtr: ptr<dirent_t>,
+        bufLen: number,
+        cookie: bigint,
+        bufUsedPtr: ptr<number>
+      ) => {
+        const initialBufPtr = bufPtr;
+        let openFile = this._openFiles.get(fd);
+        if (!openFile.handle.isDirectory) {
+          return E.NOTDIR;
+        }
+        let counter = 0n;
+        for await (let item of openFile.handle.getEntries()) {
+          if (counter++ < cookie) {
+            continue;
+          }
+          let itemSize = dirent_t.size + item.name.length;
+          if (bufLen < itemSize) {
+            break;
+          }
+          let dirent = dirent_t.get(this._getBuffer(), bufPtr);
+          dirent.next = ++cookie;
+          dirent.ino = 0n; // TODO
+          dirent.nameLen = item.name.length;
+          dirent.type = item.isDirectory ? 'directory' : 'regularFile';
+          string.set(
+            this._getBuffer(),
+            (bufPtr + dirent_t.size) as ptr<string>,
+            item.name
+          );
+          bufPtr = (bufPtr + itemSize) as ptr<dirent_t>;
+          bufLen -= itemSize;
+        }
+        size_t.set(this._getBuffer(), bufUsedPtr, bufPtr - initialBufPtr);
+      },
+      path_readlink(
+        dirFd: fd_t,
+        pathPtr: number,
+        pathLen: number,
+        bufPtr: number,
+        bufLen: number,
+        bufUsedPtr: number
+      ) {
+        return E.NOSYS;
+      },
+      path_filestat_get: async (
+        dirFd: fd_t,
+        flags: any,
+        pathPtr: ptr<string>,
+        pathLen: number,
+        filestatPtr: ptr<filestat_t>
+      ) => {
+        let path = this._resolvePath(dirFd, pathPtr, pathLen);
+        let info = await this._openFiles.getFileOrDir(path, 'fileOrDir', false);
+        let filestat = filestat_t.get(this._getBuffer(), filestatPtr);
+        filestat.dev = 0n;
+        filestat.ino = 0n; // TODO
+        filestat.filetype = info.isDirectory ? 'directory' : 'regularFile';
+        filestat.nlink = 0;
+        // https://github.com/DefinitelyTyped/DefinitelyTyped/issues/30471#issuecomment-480900510
+        if (info.isFile) {
+          let file = await info.getFile();
+          filestat.size = BigInt(file.size);
+          filestat.accessTime = filestat.modTime = filestat.changeTime =
+            BigInt(file.lastModified) * 1_000_000n;
+        } else {
+          filestat.size = filestat.accessTime = filestat.modTime = filestat.changeTime = 0n;
+        }
+      },
+      fd_seek: (
+        fd: fd_t,
+        offset: bigint,
+        whence: number,
+        filesizePtr: number
+      ) => {
+        return E.NOSYS;
       }
     };
-  })();
+  }
 
-  function resolvePath(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number): string {
-    let relativePath = string.get(memory.buffer, pathPtr, pathLen);
+  private _resolvePath(
+    dirFd: fd_t,
+    pathPtr: ptr<string>,
+    pathLen: number
+  ): string {
+    let relativePath = string.get(this._getBuffer(), pathPtr, pathLen);
     if (relativePath.startsWith('/')) {
       return relativePath;
     }
-    let cwdPath = openFiles.get(dirFd).path.slice(1);
+    let cwdPath = this._openFiles.get(dirFd).path.slice(1);
     let cwdParts = cwdPath ? cwdPath.split('/') : [];
     for (let item of relativePath.split('/')) {
       if (item === '..') {
@@ -342,7 +605,7 @@ export default ({
     return '/' + cwdParts.join('/');
   }
 
-  async function forEachIoVec(
+  private async _forEachIoVec(
     iovsPtr: ptr<iovec_t>,
     iovsLen: number,
     handledPtr: ptr<number>,
@@ -350,8 +613,8 @@ export default ({
   ) {
     let totalHandled = 0;
     for (let i = 0; i < iovsLen; i++) {
-      let iovec = iovec_t.get(memory.buffer, iovsPtr);
-      let buf = new Uint8Array(memory.buffer, iovec.bufPtr, iovec.bufLen);
+      let iovec = iovec_t.get(this._getBuffer(), iovsPtr);
+      let buf = new Uint8Array(this._getBuffer(), iovec.bufPtr, iovec.bufLen);
       let handled = await cb(buf);
       totalHandled += handled;
       if (handled < iovec.bufLen) {
@@ -359,267 +622,6 @@ export default ({
       }
       iovsPtr = (iovsPtr + iovec_t.size) as ptr<iovec_t>;
     }
-    size_t.set(memory.buffer, handledPtr, totalHandled);
+    size_t.set(this._getBuffer(), handledPtr, totalHandled);
   }
-
-  let envOffsets: number[] = [];
-  let envBuf = '';
-
-  for (let key in env) {
-    envOffsets.push(envBuf.length);
-    envBuf += `${key}=${env[key]}\0`;
-  }
-
-  let argOffsets: number[] = [];
-  let argBuf = '';
-
-  for (let arg of args) {
-    argOffsets.push(argBuf.length);
-    argBuf += `${arg}\0`;
-  }
-
-  class StdOut {
-    private _buffer = '';
-    private _decoder = new TextDecoder();
-
-    constructor(public writeLn: (line: string) => void) {}
-
-    write(data: Uint8Array) {
-      let lines = (
-        this._buffer + this._decoder.decode(data, { stream: true })
-      ).split('\n');
-      this._buffer = lines.pop()!;
-      for (let line of lines) {
-        this.writeLn(line);
-      }
-    }
-  }
-
-  let stdout = writeOut ? { write: writeOut } : new StdOut(console.log);
-  let stderr = writeErr ? { write: writeErr } : new StdOut(console.error);
-
-  return {
-    fd_prestat_get(fd: fd_t, prestatPtr: ptr<prestat_t>) {
-      if (fd !== PREOPEN_FD) {
-        return E.BADF;
-      }
-      let prestat = prestat_t.get(memory.buffer, prestatPtr);
-      prestat.type = 'dir';
-      prestat.nameLen = PREOPEN.length;
-    },
-    fd_prestat_dir_name(fd: fd_t, pathPtr: ptr<string>, pathLen: number) {
-      if (fd != PREOPEN_FD) {
-        return E.BADF;
-      }
-      string.set(memory.buffer, pathPtr, PREOPEN, pathLen);
-    },
-    environ_sizes_get(countPtr: ptr<number>, sizePtr: ptr<number>) {
-      size_t.set(memory.buffer, countPtr, envOffsets.length);
-      size_t.set(memory.buffer, sizePtr, envBuf.length);
-    },
-    environ_get(environPtr: ptr<Uint32Array>, environBufPtr: ptr<string>) {
-      new Uint32Array(memory.buffer, environPtr, envOffsets.length).set(
-        envOffsets.map(offset => environBufPtr + offset)
-      );
-      string.set(memory.buffer, environBufPtr, envBuf);
-    },
-    args_sizes_get(argcPtr: ptr<number>, argvBufSizePtr: ptr<number>) {
-      size_t.set(memory.buffer, argcPtr, argOffsets.length);
-      size_t.set(memory.buffer, argvBufSizePtr, argBuf.length);
-    },
-    args_get(argvPtr: ptr<Uint32Array>, argvBufPtr: ptr<string>) {
-      new Uint32Array(memory.buffer, argvPtr, argOffsets.length).set(
-        argOffsets.map(offset => argvBufPtr + offset)
-      );
-      string.set(memory.buffer, argvBufPtr, argBuf);
-    },
-    proc_exit(code: number) {
-      if (code != 0) {
-        stderr.write(new TextEncoder().encode(`Exited with code ${code}.\n`));
-      }
-      throw EXIT;
-    },
-    random_get(bufPtr: ptr<Uint8Array>, bufLen: number) {
-      crypto.getRandomValues(new Uint8Array(memory.buffer, bufPtr, bufLen));
-    },
-    async path_open(
-      dirFd: fd_t,
-      dirFlags: number,
-      pathPtr: ptr<string>,
-      pathLen: number,
-      oFlags: any,
-      fsRightsBase: bigint,
-      fsRightsInheriting: bigint,
-      fsFlags: any,
-      fdPtr: ptr<fd_t>
-    ) {
-      fd_t.set(
-        memory.buffer,
-        fdPtr,
-        await openFiles.open(resolvePath(dirFd, pathPtr, pathLen))
-      );
-    },
-    fd_close(fd: fd_t) {
-      openFiles.close(fd);
-    },
-    async fd_read(
-      fd: fd_t,
-      iovsPtr: ptr<iovec_t>,
-      iovsLen: number,
-      nreadPtr: ptr<number>
-    ) {
-      let openFile = openFiles.get(fd);
-      if (!openFile.handle.isFile) {
-        throw new Error('Tried to read a directory.');
-      }
-      let file = await (openFile.handle as FileSystemFileHandle).getFile();
-      await forEachIoVec(
-        iovsPtr,
-        iovsLen,
-        nreadPtr,
-        async buf => {
-          let blob = file.slice(openFile.position, openFile.position + iovsLen);
-          buf.set(new Uint8Array(await (blob as any).arrayBuffer()));
-          openFile.position += blob.size;
-          return blob.size;
-        }
-      );
-    },
-    async fd_write(
-      fd: fd_t,
-      iovsPtr: ptr<iovec_t>,
-      iovsLen: number,
-      nwrittenPtr: ptr<number>
-    ) {
-      let write: (data: Uint8Array) => Promise<number>;
-      let close: (() => Promise<void>) | void;
-      switch (fd) {
-        case 1: {
-          write = async data => {
-            await stdout.write(data);
-            return data.length;
-          };
-          break;
-        }
-        case 2: {
-          write = async data => {
-            await stderr.write(data);
-            return data.length;
-          };
-          break;
-        }
-        default: {
-          let openFile = openFiles.get(fd);
-          if (!openFile.handle.isFile) {
-            throw new Error('Tried to write to a directory.');
-          }
-          let writer = await (openFile.handle as FileSystemFileHandle).createWriter({ keepExistingData: true });
-          write = async data => {
-            await writer.write(openFile.position, data);
-            openFile.position += data.length;
-            return data.length;
-          };
-          close = () => writer.close();
-          break;
-        }
-      }
-      await forEachIoVec(iovsPtr, iovsLen, nwrittenPtr, write);
-      if (close) {
-        await close();
-      }
-    },
-    async fd_fdstat_get(fd: fd_t, fdstatPtr: ptr<fdstat_t>) {
-      let fdstat = fdstat_t.get(memory.buffer, fdstatPtr);
-      fdstat.filetype = openFiles.get(fd).handle.isDirectory
-        ? 'directory'
-        : 'regularFile';
-      fdstat.flags = 0;
-      fdstat.rightsBase = -1n;
-      fdstat.rightsInheriting = -1n;
-    },
-    async path_create_directory(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) {
-      await openFiles.getFileOrDir(resolvePath(dirFd, pathPtr, pathLen), 'dir', true);
-    },
-    async path_rename(
-      oldDirFd: fd_t,
-      oldPathPtr: ptr<string>,
-      oldPathLen: number,
-      newDirFd: fd_t,
-      newPathPtr: ptr<string>,
-      newPathLen: number
-    ) {
-      throw new Error('unimplemented');
-    },
-    async path_remove_directory(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) {
-      throw new Error('unimplemented');
-    },
-    async fd_readdir(
-      fd: fd_t,
-      bufPtr: ptr<dirent_t>,
-      bufLen: number,
-      cookie: bigint,
-      bufUsedPtr: ptr<number>
-    ) {
-      const initialBufPtr = bufPtr;
-      let openFile = openFiles.get(fd);
-      if (!openFile.handle.isDirectory) {
-        throw new Error('Tried to iterate a file.');
-      }
-      let counter = 0n;
-      for await (let item of (openFile.handle as FileSystemDirectoryHandle).getEntries()) {
-        if (counter++ < cookie) {
-          continue;
-        }
-        let itemSize = dirent_t.size + item.name.length;
-        if (bufLen < itemSize) {
-          break;
-        }
-        let dirent = dirent_t.get(memory.buffer, bufPtr);
-        dirent.next = ++cookie;
-        dirent.ino = 0n; // TODO
-        dirent.nameLen = item.name.length;
-        dirent.type = item.isDirectory ? 'directory' : 'regularFile';
-        string.set(memory.buffer, bufPtr + dirent_t.size as ptr<string>, item.name);
-        bufPtr = (bufPtr + itemSize) as ptr<dirent_t>;
-        bufLen -= itemSize;
-      }
-      size_t.set(memory.buffer, bufUsedPtr, bufPtr - initialBufPtr);
-    },
-    path_readlink(
-      dirFd: fd_t,
-      pathPtr: number,
-      pathLen: number,
-      bufPtr: number,
-      bufLen: number,
-      bufUsedPtr: number
-    ) {
-      throw new Error('unimplemented');
-    },
-    async path_filestat_get(
-      dirFd: fd_t,
-      flags: any,
-      pathPtr: ptr<string>,
-      pathLen: number,
-      filestatPtr: ptr<filestat_t>
-    ) {
-      let path = resolvePath(dirFd, pathPtr, pathLen);
-      let info = await openFiles.getFileOrDir(path, 'fileOrDir', false);
-      let filestat = filestat_t.get(memory.buffer, filestatPtr);
-      filestat.dev = 0n;
-      filestat.ino = 0n; // TODO
-      filestat.filetype = info.isDirectory ? 'directory' : 'regularFile';
-      filestat.nlink = 0;
-      // https://github.com/DefinitelyTyped/DefinitelyTyped/issues/30471#issuecomment-480900510
-      if (info.isFile) {
-        let file = await (info as FileSystemFileHandle).getFile();
-        filestat.size = BigInt(file.size);
-        filestat.accessTime = filestat.modTime = filestat.changeTime = BigInt(file.lastModified) * 1_000_000n;
-      } else {
-        filestat.size = filestat.accessTime = filestat.modTime = filestat.changeTime = 0n;
-      }
-    },
-    fd_seek(fd: fd_t, offset: bigint, whence: number, filesizePtr: number) {
-      throw new Error('unimplemented');
-    }
-  };
-};
+}
