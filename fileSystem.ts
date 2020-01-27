@@ -3,16 +3,81 @@ import { fd_t } from './bindings';
 export const PREOPEN = '/';
 export const PREOPEN_FD = 3 as fd_t;
 
-type Handle = FileSystemFileHandle | FileSystemDirectoryHandle;
+export type Handle = FileSystemFileHandle | FileSystemDirectoryHandle;
 
-type OpenFile = {
-  handle: Handle;
-  path: string;
-  position: number;
-};
+class OpenDirectory {
+  constructor(
+    public readonly path: string,
+    private readonly _handle: FileSystemDirectoryHandle
+  ) {}
+
+  isFile!: false;
+
+  getEntries() {
+    return this._handle.getEntries();
+  }
+}
+
+OpenDirectory.prototype.isFile = false;
+
+class OpenFile {
+  constructor(
+    public readonly path: string,
+    private readonly _handle: FileSystemFileHandle
+  ) {}
+
+  isFile!: true;
+
+  private _position = 0;
+  private _file: File | undefined;
+  private _writer: FileSystemWriter | undefined;
+
+  async getFile() {
+    return this._file || (this._file = await this._handle.getFile());
+  }
+
+  private async _getWriter() {
+    return this._writer || (this._writer = await this._handle.createWriter());
+  }
+
+  getPosition() {
+    return this._position;
+  }
+
+  setPosition(position: number) {
+    this._position = position;
+  }
+
+  async setSize(size: number) {
+    let writer = await this._getWriter();
+    await writer.truncate(size);
+  }
+
+  async read(len: number) {
+    let file = await this.getFile();
+    let slice = file.slice(this._position, this._position + len);
+    let arrayBuffer: ArrayBuffer = await (slice as any).arrayBuffer();
+    this._position += arrayBuffer.byteLength;
+    return new Uint8Array(arrayBuffer);
+  }
+
+  async write(data: Uint8Array) {
+    let writer = await this._getWriter();
+    await writer.write(this._position, data);
+    this._position += data.length;
+  }
+
+  async flush() {
+    await this._writer?.close();
+    this._writer = undefined;
+    this._file = undefined;
+  }
+}
+
+OpenFile.prototype.isFile = true;
 
 export class OpenFiles {
-  private _files = new Map<fd_t, OpenFile>();
+  private _files = new Map<fd_t, OpenFile | OpenDirectory>();
   private _nextFd = PREOPEN_FD;
 
   constructor(private _rootHandle: FileSystemDirectoryHandle) {
@@ -70,24 +135,21 @@ export class OpenFiles {
   }
 
   private _add(path: string, handle: Handle) {
-    this._files.set(this._nextFd, {
-      path,
-      handle,
-      position: 0
-    });
+    this._files.set(
+      this._nextFd,
+      handle.isFile
+        ? new OpenFile(path, handle)
+        : new OpenDirectory(path, handle)
+    );
     return this._nextFd++ as fd_t;
   }
 
-  async open(path: string) {
-    return this._add(path, await this.getFileOrDir(path, 'fileOrDir', false));
+  async open(path: string, create: boolean = false) {
+    return this._add(path, await this.getFileOrDir(path, 'fileOrDir', create));
   }
 
   get(fd: fd_t) {
-    let file = this._files.get(fd);
-    if (!file) {
-      throw new Error('Tried to retrieve a non-existing file.');
-    }
-    return file;
+    return this._files.get(fd);
   }
 
   close(fd: fd_t) {

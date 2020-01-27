@@ -31,14 +31,41 @@ document.getElementById('openDir').addEventListener('click', async () => {
                     rootHandle,
                     stdout,
                     stderr: stdout,
-                    args: args.split(' ')
+                    args: args.split(' '),
+                    env: {
+                        RUST_BACKTRACE: '1'
+                    }
                 });
                 let { exports } = await Asyncify.instantiate(await wasmModule, {
-                    wasi_unstable: bindings.getWasiImports()
+                    env: {
+                        sync() {
+                            throw new Error('Tried to call env.sync.');
+                        }
+                    },
+                    wasi_unstable: new Proxy(bindings.getWasiImports(), {
+                        get(target, key) {
+                            let f = target[key];
+                            if (!f) {
+                                return f;
+                            }
+                            return async (...args) => {
+                                let res = await f(...args);
+                                console.log({ key, args, res });
+                                return res;
+                            };
+                        }
+                    })
                 });
                 bindings.memory = exports.memory;
+                let logLine = args;
                 args = '';
-                await exports._start();
+                console.time(logLine);
+                try {
+                    await exports._start();
+                }
+                finally {
+                    console.timeEnd(logLine);
+                }
             }
             catch (e) {
                 if (e !== EXIT) {

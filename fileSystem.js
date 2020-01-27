@@ -1,5 +1,56 @@
 export const PREOPEN = '/';
 export const PREOPEN_FD = 3;
+class OpenDirectory {
+    constructor(path, _handle) {
+        this.path = path;
+        this._handle = _handle;
+    }
+    getEntries() {
+        return this._handle.getEntries();
+    }
+}
+OpenDirectory.prototype.isFile = false;
+class OpenFile {
+    constructor(path, _handle) {
+        this.path = path;
+        this._handle = _handle;
+        this._position = 0;
+    }
+    async getFile() {
+        return this._file || (this._file = await this._handle.getFile());
+    }
+    async _getWriter() {
+        return this._writer || (this._writer = await this._handle.createWriter());
+    }
+    getPosition() {
+        return this._position;
+    }
+    setPosition(position) {
+        this._position = position;
+    }
+    async setSize(size) {
+        let writer = await this._getWriter();
+        await writer.truncate(size);
+    }
+    async read(len) {
+        let file = await this.getFile();
+        let slice = file.slice(this._position, this._position + len);
+        let arrayBuffer = await slice.arrayBuffer();
+        this._position += arrayBuffer.byteLength;
+        return new Uint8Array(arrayBuffer);
+    }
+    async write(data) {
+        let writer = await this._getWriter();
+        await writer.write(this._position, data);
+        this._position += data.length;
+    }
+    async flush() {
+        await this._writer?.close();
+        this._writer = undefined;
+        this._file = undefined;
+    }
+}
+OpenFile.prototype.isFile = true;
 export class OpenFiles {
     constructor(_rootHandle) {
         this._rootHandle = _rootHandle;
@@ -42,22 +93,16 @@ export class OpenFiles {
         }
     }
     _add(path, handle) {
-        this._files.set(this._nextFd, {
-            path,
-            handle,
-            position: 0
-        });
+        this._files.set(this._nextFd, handle.isFile
+            ? new OpenFile(path, handle)
+            : new OpenDirectory(path, handle));
         return this._nextFd++;
     }
-    async open(path) {
-        return this._add(path, await this.getFileOrDir(path, 'fileOrDir', false));
+    async open(path, create = false) {
+        return this._add(path, await this.getFileOrDir(path, 'fileOrDir', create));
     }
     get(fd) {
-        let file = this._files.get(fd);
-        if (!file) {
-            throw new Error('Tried to retrieve a non-existing file.');
-        }
-        return file;
+        return this._files.get(fd);
     }
     close(fd) {
         if (!this._files.delete(fd)) {
