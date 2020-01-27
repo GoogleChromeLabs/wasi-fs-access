@@ -438,7 +438,7 @@ export default class Bindings {
         }
         let openFile = maybeFile;
         await this._forEachIoVec(iovsPtr, iovsLen, nreadPtr, async buf => {
-          let chunk = await openFile.read(iovsLen);
+          let chunk = await openFile.read(buf.length);
           buf.set(chunk);
           return chunk.length;
         });
