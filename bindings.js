@@ -113,7 +113,7 @@ const iovec_t = struct({
     bufLen: size_t
 });
 const filetype_t = enumer(uint8_t);
-const fdflags_t = uint16_t;
+const fdflags_t = enumer(uint16_t);
 const rights_t = uint64_t;
 const fdstat_t = struct({
     filetype: filetype_t,
@@ -251,7 +251,11 @@ export default class Bindings {
                 crypto.getRandomValues(new Uint8Array(this._getBuffer(), bufPtr, bufLen));
             },
             path_open: async (dirFd, dirFlags, pathPtr, pathLen, oFlags, fsRightsBase, fsRightsInheriting, fsFlags, fdPtr) => {
-                fd_t.set(this._getBuffer(), fdPtr, await this._openFiles.open(this._resolvePath(dirFd, pathPtr, pathLen), (oFlags & 1) !== 0));
+                if (fsFlags != 0) {
+                    console.warn(`fsFlags are not implemented.`);
+                    return 28 /* INVAL */;
+                }
+                fd_t.set(this._getBuffer(), fdPtr, await this._openFiles.open(this._resolvePath(dirFd, pathPtr, pathLen), oFlags));
             },
             fd_close: (fd) => {
                 this._openFiles.close(fd);
@@ -320,7 +324,7 @@ export default class Bindings {
                 fdstat.rightsInheriting = -1n;
             },
             path_create_directory: async (dirFd, pathPtr, pathLen) => {
-                await this._openFiles.getFileOrDir(this._resolvePath(dirFd, pathPtr, pathLen), 'dir', true);
+                await this._openFiles.getFileOrDir(this._resolvePath(dirFd, pathPtr, pathLen), 2 /* Dir */, 1 /* Create */ | 2 /* Directory */ | 4 /* Exclusive */);
             },
             path_rename: async (oldDirFd, oldPathPtr, oldPathLen, newDirFd, newPathPtr, newPathLen) => unimplemented(),
             path_remove_directory: (dirFd, pathPtr, pathLen) => unimplemented(),
@@ -360,7 +364,7 @@ export default class Bindings {
                 let path = this._resolvePath(dirFd, pathPtr, pathLen);
                 let handle;
                 try {
-                    handle = await this._openFiles.getFileOrDir(path, 'fileOrDir', false);
+                    handle = await this._openFiles.getFileOrDir(path, 1 /* File */ | 2 /* Dir */);
                 }
                 catch {
                     return 44 /* NOENT */;

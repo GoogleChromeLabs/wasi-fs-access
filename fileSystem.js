@@ -58,13 +58,13 @@ export class OpenFiles {
         this._nextFd = PREOPEN_FD;
         this._add(PREOPEN, _rootHandle);
     }
-    async getFileOrDir(path, mode, create) {
+    async getFileOrDir(path, mode, openFlags = 0) {
         if (!path.startsWith('/')) {
             throw new Error('Non-absolute path.');
         }
         path = path.slice(1);
         if (!path) {
-            if (mode !== 'file') {
+            if (mode & 2 /* Dir */) {
                 return this._rootHandle;
             }
             else {
@@ -77,20 +77,52 @@ export class OpenFiles {
         for (let chunk of items) {
             curDir = await curDir.getDirectory(chunk);
         }
-        if (mode === 'file') {
-            return curDir.getFile(lastItem, { create });
-        }
-        else if (mode === 'dir') {
+        async function openWithCreate(create) {
+            if (mode & 1 /* File */) {
+                try {
+                    return await curDir.getFile(lastItem, { create });
+                }
+                catch (e) {
+                    if (!(mode & 2 /* Dir */)) {
+                        throw e;
+                    }
+                }
+            }
             return curDir.getDirectory(lastItem, { create });
         }
-        else {
-            try {
-                return await curDir.getFile(lastItem, { create });
+        if (openFlags & 2 /* Directory */) {
+            if (mode & 2 /* Dir */) {
+                mode = 2 /* Dir */;
             }
-            catch {
-                return curDir.getDirectory(lastItem, { create });
+            else {
+                throw new Error('Asked for a file but opening as a directory.');
             }
         }
+        let handle;
+        if (openFlags & 1 /* Create */) {
+            if (openFlags & 4 /* Exclusive */) {
+                let exists = false;
+                try {
+                    await openWithCreate(false);
+                    exists = true;
+                }
+                catch { }
+                if (exists) {
+                    throw new Error('Already exists.');
+                }
+            }
+            handle = await openWithCreate(true);
+        }
+        else {
+            handle = await openWithCreate(false);
+        }
+        if (openFlags & 8 /* Truncate */) {
+            if (handle.isDirectory) {
+                throw new Error('Tried to truncate a directory.');
+            }
+            await (await handle.createWriter({ keepExistingData: false })).close();
+        }
+        return handle;
     }
     _add(path, handle) {
         this._files.set(this._nextFd, handle.isFile
@@ -98,8 +130,8 @@ export class OpenFiles {
             : new OpenDirectory(path, handle));
         return this._nextFd++;
     }
-    async open(path, create = false) {
-        return this._add(path, await this.getFileOrDir(path, 'fileOrDir', create));
+    async open(path, openFlags) {
+        return this._add(path, await this.getFileOrDir(path, 1 /* File */ | 2 /* Dir */, openFlags));
     }
     get(fd) {
         return this._files.get(fd);

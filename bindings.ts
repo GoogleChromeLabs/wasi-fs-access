@@ -1,4 +1,10 @@
-import { OpenFiles, PREOPEN_FD, PREOPEN, Handle } from './fileSystem.js';
+import {
+  OpenFiles,
+  PREOPEN_FD,
+  PREOPEN,
+  Handle,
+  FileOrDir
+} from './fileSystem.js';
 
 type ptr<T> = number & { _pointerTarget: T };
 
@@ -173,7 +179,7 @@ const enum FileType {
 }
 const filetype_t = enumer<FileType>(uint8_t);
 
-const fdflags_t = uint16_t;
+const fdflags_t = enumer<FdFlags>(uint16_t);
 
 const rights_t = uint64_t;
 
@@ -230,6 +236,21 @@ const enum Whence {
   Current,
   End,
   Set
+}
+
+export const enum OpenFlags {
+  Create = 1 << 0,
+  Directory = 1 << 1,
+  Exclusive = 1 << 2,
+  Truncate = 1 << 3
+}
+
+export const enum FdFlags {
+  Append = 1 << 0,
+  DSync = 1 << 1,
+  NonBlock = 1 << 2,
+  RSync = 1 << 3,
+  Sync = 1 << 4
 }
 
 interface Out {
@@ -405,18 +426,22 @@ export default class Bindings {
         dirFlags: number,
         pathPtr: ptr<string>,
         pathLen: number,
-        oFlags: any,
+        oFlags: OpenFlags,
         fsRightsBase: bigint,
         fsRightsInheriting: bigint,
-        fsFlags: any,
+        fsFlags: FdFlags,
         fdPtr: ptr<fd_t>
       ) => {
+        if (fsFlags != 0) {
+          console.warn(`fsFlags are not implemented.`);
+          return E.INVAL;
+        }
         fd_t.set(
           this._getBuffer(),
           fdPtr,
           await this._openFiles.open(
             this._resolvePath(dirFd, pathPtr, pathLen),
-            (oFlags & 1) !== 0
+            oFlags
           )
         );
       },
@@ -503,8 +528,8 @@ export default class Bindings {
       ) => {
         await this._openFiles.getFileOrDir(
           this._resolvePath(dirFd, pathPtr, pathLen),
-          'dir',
-          true
+          FileOrDir.Dir,
+          OpenFlags.Create | OpenFlags.Directory | OpenFlags.Exclusive
         );
       },
       path_rename: async (
@@ -579,7 +604,10 @@ export default class Bindings {
         let path = this._resolvePath(dirFd, pathPtr, pathLen);
         let handle: Handle;
         try {
-          handle = await this._openFiles.getFileOrDir(path, 'fileOrDir', false);
+          handle = await this._openFiles.getFileOrDir(
+            path,
+            FileOrDir.File | FileOrDir.Dir
+          );
         } catch {
           return E.NOENT;
         }
