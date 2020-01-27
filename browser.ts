@@ -71,14 +71,8 @@ document.getElementById('openDir')!.addEventListener('click', async () => {
           })
         });
         bindings.memory = exports.memory;
-        let logLine = args;
         args = '';
-        console.time(logLine);
-        try {
-          await exports._start();
-        } finally {
-          console.timeEnd(logLine);
-        }
+        await exports._start();
       } catch (e) {
         if (e !== EXIT) {
           term.writeln(e.message);
