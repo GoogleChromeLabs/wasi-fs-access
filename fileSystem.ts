@@ -1,6 +1,5 @@
-import { fd_t, OpenFlags } from './bindings';
+import { fd_t, OpenFlags, SystemError, E } from './bindings.js';
 
-export const PREOPEN = '/';
 export const PREOPEN_FD = 3 as fd_t;
 
 export type Handle = FileSystemFileHandle | FileSystemDirectoryHandle;
@@ -15,6 +14,14 @@ class OpenDirectory {
 
   getEntries() {
     return this._handle.getEntries();
+  }
+
+  asFile(): never {
+    throw new SystemError(E.ISDIR, this.path);
+  }
+
+  asDir() {
+    return this;
   }
 }
 
@@ -37,7 +44,11 @@ class OpenFile {
   }
 
   private async _getWriter() {
-    return this._writer || (this._writer = await this._handle.createWriter());
+    try {
+      return this._writer || (this._writer = await this._handle.createWriter());
+    } catch {
+      throw new SystemError(E.ACCES, this.path);
+    }
   }
 
   getPosition() {
@@ -72,6 +83,14 @@ class OpenFile {
     this._writer = undefined;
     this._file = undefined;
   }
+
+  asFile() {
+    return this;
+  }
+
+  asDir(): never {
+    throw new SystemError(E.NOTDIR, this.path);
+  }
 }
 
 OpenFile.prototype.isFile = true;
@@ -86,7 +105,28 @@ export class OpenFiles {
   private _nextFd = PREOPEN_FD;
 
   constructor(private _rootHandle: FileSystemDirectoryHandle) {
-    this._add(PREOPEN, _rootHandle);
+    this._add('/', _rootHandle);
+  }
+
+  private async _getParent(path: string) {
+    if (!path.startsWith('/')) {
+      throw new SystemError(E.INVAL, path);
+    }
+    path = path.slice(1);
+    let items = path.split('/');
+    let lastItem = items.pop()!;
+    let curDir = this._rootHandle;
+    for (let [i, chunk] of items.entries()) {
+      try {
+        curDir = await curDir.getDirectory(chunk);
+      } catch {
+        throw new SystemError(E.NOENT, '/' + items.slice(0, i).join('/'));
+      }
+    }
+    return {
+      parent: curDir,
+      name: lastItem
+    };
   }
 
   getFileOrDir(
@@ -105,63 +145,70 @@ export class OpenFiles {
     openFlags?: OpenFlags
   ): Promise<Handle>;
   async getFileOrDir(path: string, mode: FileOrDir, openFlags: OpenFlags = 0) {
-    if (!path.startsWith('/')) {
-      throw new Error('Non-absolute path.');
-    }
-    path = path.slice(1);
-    if (!path) {
-      if (mode & FileOrDir.Dir) {
+    if (path === '/') {
+      if (
+        mode & FileOrDir.Dir &&
+        !(openFlags & (OpenFlags.Create | OpenFlags.Truncate))
+      ) {
         return this._rootHandle;
       } else {
-        throw new Error('Requested a file, but got root directory.');
+        throw new SystemError(E.ACCES, path);
       }
     }
-    let items = path.split('/');
-    let lastItem = items.pop()!;
-    let curDir = this._rootHandle;
-    for (let chunk of items) {
-      curDir = await curDir.getDirectory(chunk);
-    }
+    let { parent, name } = await this._getParent(path);
     async function openWithCreate(create: boolean) {
       if (mode & FileOrDir.File) {
         try {
-          return await curDir.getFile(lastItem, { create });
+          return await parent.getFile(name, { create });
         } catch (e) {
           if (!(mode & FileOrDir.Dir)) {
             throw e;
           }
         }
       }
-      return curDir.getDirectory(lastItem, { create });
+      return parent.getDirectory(name, { create });
     }
     if (openFlags & OpenFlags.Directory) {
       if (mode & FileOrDir.Dir) {
         mode = FileOrDir.Dir;
       } else {
-        throw new Error('Asked for a file but opening as a directory.');
+        throw new SystemError(E.INVAL, openFlags);
       }
     }
     let handle: Handle;
     if (openFlags & OpenFlags.Create) {
       if (openFlags & OpenFlags.Exclusive) {
-        let exists = false;
+        let exists = true;
         try {
           await openWithCreate(false);
-          exists = true;
-        } catch {}
+        } catch {
+          exists = false;
+        }
         if (exists) {
-          throw new Error('Already exists.');
+          throw new SystemError(E.EXIST, path);
         }
       }
-      handle = await openWithCreate(true);
+      try {
+        handle = await openWithCreate(true);
+      } catch {
+        throw new SystemError(E.ACCES, path);
+      }
     } else {
-      handle = await openWithCreate(false);
+      try {
+        handle = await openWithCreate(false);
+      } catch {
+        throw new SystemError(E.NOENT, path);
+      }
     }
     if (openFlags & OpenFlags.Truncate) {
       if (handle.isDirectory) {
-        throw new Error('Tried to truncate a directory.');
+        throw new SystemError(E.ISDIR, path);
       }
-      await (await handle.createWriter({ keepExistingData: false })).close();
+      try {
+        await (await handle.createWriter({ keepExistingData: false })).close();
+      } catch {
+        throw new SystemError(E.ACCES, path);
+      }
     }
     return handle;
   }
@@ -184,12 +231,22 @@ export class OpenFiles {
   }
 
   get(fd: fd_t) {
-    return this._files.get(fd);
+    let openFile = this._files.get(fd);
+    if (!openFile) {
+      throw new SystemError(E.BADF, fd);
+    }
+    return openFile;
   }
 
-  close(fd: fd_t) {
-    if (!this._files.delete(fd)) {
-      throw new Error('Tried to close a non-existing file.');
+  async close(fd: fd_t) {
+    let file = this.get(fd);
+    if (file.isFile) {
+      await file.flush();
     }
+  }
+
+  async delete(path: string) {
+    let { parent, name } = await this._getParent(path);
+    await parent.removeEntry(name);
   }
 }

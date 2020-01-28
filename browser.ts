@@ -64,7 +64,7 @@ document.getElementById('openDir')!.addEventListener('click', async () => {
               }
               return async (...args: any[]) => {
                 let res = await f(...args);
-                console.log({ key, args, res });
+                // console.log({ key, args, res });
                 return res;
               };
             }

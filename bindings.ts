@@ -1,10 +1,5 @@
-import {
-  OpenFiles,
-  PREOPEN_FD,
-  PREOPEN,
-  Handle,
-  FileOrDir
-} from './fileSystem.js';
+import { OpenFiles, PREOPEN_FD, Handle, FileOrDir } from './fileSystem.js';
+import { wrap } from 'module';
 
 type ptr<T> = number & { _pointerTarget: T };
 
@@ -223,13 +218,22 @@ const filestat_t = struct({
 });
 type filestat_t = TargetType<typeof filestat_t>;
 
-const enum E {
+export enum E {
+  SUCCESS = 0,
+  ACCES = 2,
   BADF = 8,
+  EXIST = 20,
   INVAL = 28,
   ISDIR = 31,
   NOENT = 44,
   NOSYS = 52,
   NOTDIR = 54
+}
+
+export class SystemError extends Error {
+  constructor(public readonly code: E, public readonly value?: any) {
+    super(`E${E[code]}` + (value ? ` with value ${value}` : ''));
+  }
 }
 
 const enum Whence {
@@ -275,8 +279,7 @@ class StdOut {
 }
 
 function unimplemented() {
-  console.trace('Invoked unimplemented function.');
-  return E.NOSYS;
+  throw new SystemError(E.NOSYS);
 }
 
 export default class Bindings {
@@ -362,14 +365,14 @@ export default class Bindings {
   getWasiImports(): {
     [key: string]: (...args: any[]) => void | E | Promise<void | E>;
   } {
-    return {
+    const bindings = {
       fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
         if (fd !== PREOPEN_FD) {
           return E.BADF;
         }
         let prestat = prestat_t.get(this._getBuffer(), prestatPtr);
         prestat.type = PreOpenType.Dir;
-        prestat.nameLen = PREOPEN.length;
+        prestat.nameLen = '/'.length;
       },
       fd_prestat_dir_name: (
         fd: fd_t,
@@ -379,7 +382,7 @@ export default class Bindings {
         if (fd != PREOPEN_FD) {
           return E.BADF;
         }
-        string.set(this._getBuffer(), pathPtr, PREOPEN, pathLen);
+        string.set(this._getBuffer(), pathPtr, '/', pathLen);
       },
       environ_sizes_get: (countPtr: ptr<number>, sizePtr: ptr<number>) => {
         size_t.set(this._getBuffer(), countPtr, this._envOffsets.length);
@@ -445,23 +448,14 @@ export default class Bindings {
           )
         );
       },
-      fd_close: (fd: fd_t) => {
-        this._openFiles.close(fd);
-      },
+      fd_close: (fd: fd_t) => this._openFiles.close(fd),
       fd_read: async (
         fd: fd_t,
         iovsPtr: ptr<iovec_t>,
         iovsLen: number,
         nreadPtr: ptr<number>
       ) => {
-        let maybeFile = this._openFiles.get(fd);
-        if (!maybeFile) {
-          return E.BADF;
-        }
-        if (!maybeFile.isFile) {
-          return E.ISDIR;
-        }
-        let openFile = maybeFile;
+        let openFile = this._openFiles.get(fd).asFile();
         await this._forEachIoVec(iovsPtr, iovsLen, nreadPtr, async buf => {
           let chunk = await openFile.read(buf.length);
           buf.set(chunk);
@@ -491,14 +485,7 @@ export default class Bindings {
             break;
           }
           default: {
-            let maybeFile = this._openFiles.get(fd);
-            if (!maybeFile) {
-              return E.BADF;
-            }
-            if (!maybeFile.isFile) {
-              return E.ISDIR;
-            }
-            let openFile = maybeFile;
+            let openFile = this._openFiles.get(fd).asFile();
             write = async data => {
               await openFile.write(data);
               return data.length;
@@ -510,9 +497,6 @@ export default class Bindings {
       },
       fd_fdstat_get: async (fd: fd_t, fdstatPtr: ptr<fdstat_t>) => {
         let openFile = this._openFiles.get(fd);
-        if (!openFile) {
-          return E.BADF;
-        }
         let fdstat = fdstat_t.get(this._getBuffer(), fdstatPtr);
         fdstat.filetype = openFile.isFile
           ? FileType.RegularFile
@@ -526,11 +510,15 @@ export default class Bindings {
         pathPtr: ptr<string>,
         pathLen: number
       ) => {
-        await this._openFiles.getFileOrDir(
-          this._resolvePath(dirFd, pathPtr, pathLen),
-          FileOrDir.Dir,
-          OpenFlags.Create | OpenFlags.Directory | OpenFlags.Exclusive
-        );
+        try {
+          await this._openFiles.getFileOrDir(
+            this._resolvePath(dirFd, pathPtr, pathLen),
+            FileOrDir.Dir,
+            OpenFlags.Create | OpenFlags.Directory | OpenFlags.Exclusive
+          );
+        } catch {
+          return E.NOENT;
+        }
       },
       path_rename: async (
         oldDirFd: fd_t,
@@ -544,7 +532,7 @@ export default class Bindings {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => unimplemented(),
+      ) => this._openFiles.delete(this._resolvePath(dirFd, pathPtr, pathLen)),
       fd_readdir: async (
         fd: fd_t,
         bufPtr: ptr<dirent_t>,
@@ -553,15 +541,9 @@ export default class Bindings {
         bufUsedPtr: ptr<number>
       ) => {
         const initialBufPtr = bufPtr;
-        let openFile = this._openFiles.get(fd);
-        if (!openFile) {
-          return E.BADF;
-        }
-        if (openFile.isFile) {
-          return E.NOTDIR;
-        }
+        let openDir = this._openFiles.get(fd).asDir();
         let counter = 0n;
-        for await (let item of openFile.getEntries()) {
+        for await (let item of openDir.getEntries()) {
           if (counter++ < cookie) {
             continue;
           }
@@ -602,15 +584,10 @@ export default class Bindings {
         filestatPtr: ptr<filestat_t>
       ) => {
         let path = this._resolvePath(dirFd, pathPtr, pathLen);
-        let handle: Handle;
-        try {
-          handle = await this._openFiles.getFileOrDir(
-            path,
-            FileOrDir.File | FileOrDir.Dir
-          );
-        } catch {
-          return E.NOENT;
-        }
+        let handle = await this._openFiles.getFileOrDir(
+          path,
+          FileOrDir.File | FileOrDir.Dir
+        );
         return this._getFileStat(
           handle.isFile ? await handle.getFile() : undefined,
           filestatPtr
@@ -662,7 +639,7 @@ export default class Bindings {
         );
       },
       path_unlink_file: (dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) =>
-        unimplemented(),
+        this._openFiles.delete(this._resolvePath(dirFd, pathPtr, pathLen)),
       poll_oneoff: (
         subscriptionPtr: ptr<any>,
         eventsPtr: ptr<any>,
@@ -708,6 +685,27 @@ export default class Bindings {
         await openFile.setSize(Number(newSize));
       }
     };
+
+    return new Proxy(bindings, {
+      get(target, name, receiver) {
+        let value = Reflect.get(target, name, receiver);
+        if (typeof name !== 'string' || typeof value !== 'function') {
+          return value;
+        }
+        return async (...args: any[]) => {
+          try {
+            return (await value(...args)) ?? E.SUCCESS;
+          } catch (e) {
+            if (e instanceof SystemError) {
+              console.warn(e);
+              return e.code;
+            } else {
+              throw e;
+            }
+          }
+        };
+      }
+    });
   }
 
   private _resolvePath(
@@ -715,16 +713,14 @@ export default class Bindings {
     pathPtr: ptr<string>,
     pathLen: number
   ): string {
-    let dir = this._openFiles.get(dirFd);
-    if (!dir) {
-      throw new Error('Invalid descriptor for preopened dir.');
+    if (dirFd !== PREOPEN_FD) {
+      throw new SystemError(E.INVAL, dirFd);
     }
     let relativePath = string.get(this._getBuffer(), pathPtr, pathLen);
     if (relativePath.startsWith('/')) {
       return relativePath;
     }
-    let cwdPath = dir.path.slice(1);
-    let cwdParts = cwdPath ? cwdPath.split('/') : [];
+    let cwdParts = [];
     for (let item of relativePath.split('/')) {
       if (item === '..') {
         cwdParts.pop();
