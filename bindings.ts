@@ -1,5 +1,4 @@
 import { OpenFiles, PREOPEN_FD, Handle, FileOrDir } from './fileSystem.js';
-import { wrap } from 'module';
 
 type ptr<T> = number & { _pointerTarget: T };
 
@@ -119,16 +118,8 @@ function struct<T extends Record<string, WritableType<any>>>(
 }
 
 function enumer<E extends number>(base: WritableType<number>): WritableType<E> {
-  return {
-    size: base.size,
-    align: base.align,
-    get(buf, ptr) {
-      return base.get(buf, ptr) as E;
-    },
-    set(buf, ptr, value) {
-      base.set(buf, ptr, value);
-    }
-  };
+  // All the properties are same as for the underlying number, this wrapper is only useful at typechecking level.
+  return base as WritableType<E>;
 }
 
 const int8_t = std('Int8', 1);

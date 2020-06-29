@@ -82,16 +82,8 @@ function struct(desc) {
     };
 }
 function enumer(base) {
-    return {
-        size: base.size,
-        align: base.align,
-        get(buf, ptr) {
-            return base.get(buf, ptr);
-        },
-        set(buf, ptr, value) {
-            base.set(buf, ptr, value);
-        }
-    };
+    // All the properties are same as for the underlying number, this wrapper is only useful at typechecking level.
+    return base;
 }
 const int8_t = std('Int8', 1);
 const uint8_t = std('Uint8', 1);
