@@ -1,14 +1,14 @@
 import Bindings, { EXIT } from './bindings.js';
 
 // @ts-ignore
-import * as Asyncify from './node_modules/asyncify-wasm/dist/asyncify.mjs';
+import * as Asyncify from '../node_modules/asyncify-wasm/dist/asyncify.mjs';
 
 const wasmModule = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
 
 declare const Terminal: typeof import('xterm').Terminal;
 
 document.getElementById('openDir')!.addEventListener('click', async () => {
-  let rootHandle = await chooseFileSystemEntries({ type: 'openDirectory' });
+  let rootHandle = await chooseFileSystemEntries({ type: 'open-directory' });
 
   let term = new Terminal();
   term.open(document.getElementById('terminal')!);
@@ -42,7 +42,10 @@ document.getElementById('openDir')!.addEventListener('click', async () => {
       term.writeln('');
       try {
         let bindings = new Bindings({
-          rootHandle,
+          preOpen: {
+            '/sandbox': await rootHandle.getDirectory('sandbox'),
+            '/tmp': await rootHandle.getDirectory('tmp')
+          },
           stdout,
           stderr: stdout,
           args: args.split(' '),
@@ -52,23 +55,9 @@ document.getElementById('openDir')!.addEventListener('click', async () => {
         });
         let { exports } = await Asyncify.instantiate(await wasmModule, {
           env: {
-            sync() {
-              throw new Error('Tried to call env.sync.');
-            }
+            sync() { throw new Error('unreachable') }
           },
-          wasi_unstable: new Proxy(bindings.getWasiImports(), {
-            get(target: any, key) {
-              let f = target[key];
-              if (!f) {
-                return f;
-              }
-              return async (...args: any[]) => {
-                let res = await f(...args);
-                // console.log({ key, args, res });
-                return res;
-              };
-            }
-          })
+          wasi_unstable: bindings.getWasiImports()
         });
         bindings.memory = exports.memory;
         args = '';

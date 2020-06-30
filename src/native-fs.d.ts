@@ -1,6 +1,6 @@
 // Modified from https://gist.githubusercontent.com/screeny05/b1b7cbeb81479ece36dae21a9ee17d30/raw/8aa25f95b4dc5715cf6622664a12e51b6f10574c/index.ts
 
-declare type ChooseFileSystemEntriesType = 'openFile' | 'saveFile' | 'openDirectory';
+declare type ChooseFileSystemEntriesType = 'open-file' | 'save-file' | 'open-directory';
 
 interface ChooseFileSystemEntriesOptionsAccepts {
     description?: string;
@@ -67,7 +67,7 @@ interface FileSystemFileHandle extends FileSystemHandle {
     readonly isFile: true;
     readonly isDirectory: false;
     getFile(): Promise<File>;
-    createWriter(options?: FileSystemCreateWriterOptions): Promise<FileSystemWriter>;
+    createWritable(options?: FileSystemCreateWriterOptions): Promise<FileSystemWriter>;
 }
 
 interface FileSystemFileHandleConstructor {
@@ -88,10 +88,10 @@ interface FileSystemDirectoryHandleConstructor {
     getSystemDirectory(options: GetSystemDirectoryOptions): Promise<FileSystemDirectoryHandle>;
 }
 
-declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'openFile' | 'saveFile', multiple: true }): Promise<FileSystemFileHandle[]>;
-declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'openFile' | 'saveFile', multiple?: false }): Promise<FileSystemFileHandle>;
-declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'openDirectory', multiple: true }): never;
-declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'openDirectory', multiple?: false }): Promise<FileSystemDirectoryHandle>;
+declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'open-file' | 'save-file', multiple: true }): Promise<FileSystemFileHandle[]>;
+declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'open-file' | 'save-file', multiple?: false }): Promise<FileSystemFileHandle>;
+declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'open-directory', multiple: true }): never;
+declare function chooseFileSystemEntries(options?: ChooseFileSystemEntriesOptions & { type: 'open-directory', multiple?: false }): Promise<FileSystemDirectoryHandle>;
 declare const FileSystemHandle: FileSystemHandleConstructor;
 declare const FileSystemFileHandle: FileSystemFileHandleConstructor;
 declare const FileSystemDirectoryHandle: FileSystemDirectoryHandleConstructor;

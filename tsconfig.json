@@ -4,6 +4,8 @@
 		"strict": true,
 		"target": "ESNext",
 		"moduleResolution": "Node",
-		"module": "ESNext"
+		"module": "ESNext",
+		"outDir": "dist",
+		"sourceMap": true
 	}
 }
