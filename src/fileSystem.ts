@@ -11,7 +11,7 @@ class OpenDirectory {
   isFile!: false;
 
   asFile(): never {
-    throw new SystemError(E.ISDIR, this.path);
+    throw new SystemError(E.ISDIR);
   }
 
   asDir() {
@@ -28,7 +28,7 @@ class OpenDirectory {
     for (let item of parts) {
       if (item === '..') {
         if (resolvedParts.pop() === undefined) {
-          throw new SystemError(E.ACCES, this.path + '/..');
+          throw new SystemError(E.NOTCAPABLE);
         }
       } else if (item !== '.') {
         resolvedParts.push(item);
@@ -67,14 +67,14 @@ class OpenDirectory {
     if (maybeName === undefined) {
       if (mode & FileOrDir.Dir) {
         if (openFlags & (OpenFlags.Create | OpenFlags.Exclusive)) {
-          throw new SystemError(E.EXIST, path);
+          throw new SystemError(E.EXIST);
         }
         if (openFlags & OpenFlags.Truncate) {
-          throw new SystemError(E.ISDIR, path);
+          throw new SystemError(E.ISDIR);
         }
         return parent;
       } else {
-        throw new SystemError(E.ISDIR, path);
+        throw new SystemError(E.ISDIR);
       }
     }
     let name = maybeName;
@@ -82,25 +82,25 @@ class OpenDirectory {
       if (mode & FileOrDir.File) {
         try {
           return await parent.getFile(name, { create });
-        } catch (e) {
-          if (e.name === 'TypeMismatchError') {
+        } catch (err) {
+          if (err.name === 'TypeMismatchError') {
             if (!(mode & FileOrDir.Dir)) {
-              console.warn(e);
-              throw new SystemError(E.ISDIR, path);
+              console.warn(err);
+              throw new SystemError(E.ISDIR);
             }
           } else {
-            throw e;
+            throw err;
           }
         }
       }
       try {
         return await parent.getDirectory(name, { create });
-      } catch (e) {
-        if (e.name === 'TypeMismatchError') {
-          console.warn(e);
-          throw new SystemError(E.NOTDIR, path);
+      } catch (err) {
+        if (err.name === 'TypeMismatchError') {
+          console.warn(err);
+          throw new SystemError(E.NOTDIR);
         } else {
-          throw e;
+          throw err;
         }
       }
     }
@@ -108,7 +108,9 @@ class OpenDirectory {
       if (mode & FileOrDir.Dir) {
         mode = FileOrDir.Dir;
       } else {
-        throw new TypeError(`Open flags ${openFlags} require a directory but mode ${mode} doesn't allow it.`);
+        throw new TypeError(
+          `Open flags ${openFlags} require a directory but mode ${mode} doesn't allow it.`
+        );
       }
     }
     let handle: Handle;
@@ -121,30 +123,19 @@ class OpenDirectory {
           exists = false;
         }
         if (exists) {
-          throw new SystemError(E.EXIST, path);
+          throw new SystemError(E.EXIST);
         }
       }
-      try {
-        handle = await openWithCreate(true);
-      } catch {
-        throw new SystemError(E.ACCES, path);
-      }
+      handle = await openWithCreate(true);
     } else {
-      try {
-        handle = await openWithCreate(false);
-      } catch {
-        throw new SystemError(E.NOENT, path);
-      }
+      handle = await openWithCreate(false);
     }
     if (openFlags & OpenFlags.Truncate) {
       if (handle.isDirectory) {
-        throw new SystemError(E.ISDIR, path);
+        throw new SystemError(E.ISDIR);
       }
-      try {
-        await handle.createWritable({ keepExistingData: false });
-      } catch {
-        throw new SystemError(E.ACCES, path);
-      }
+      let writable = await handle.createWritable({ keepExistingData: false });
+      await writable.close();
     }
     return handle;
   }
@@ -152,7 +143,7 @@ class OpenDirectory {
   async delete(path: string) {
     let { parent, name } = await this._resolve(path);
     if (!name) {
-      throw new SystemError(E.ACCES, path);
+      throw new SystemError(E.ACCES);
     }
     await parent.removeEntry(name);
   }
@@ -162,11 +153,6 @@ class OpenDirectory {
 
 OpenDirectory.prototype.isFile = false;
 
-// Note: currently this class might return inconsistent results if file
-// is both being written to (without flush) and read from.
-//
-// In principle, this matches behaviour of many other platforms, but
-// would be good to understand what are the expectations of WASI here.
 class OpenFile {
   constructor(
     public readonly path: string,
@@ -177,9 +163,11 @@ class OpenFile {
 
   public position = 0;
   private _file: File | undefined;
-  private _writer: FileSystemWriter | undefined;
+  private _writer: FileSystemWritableFileStream | undefined;
 
   async getFile() {
+    // TODO: do we really have to?
+    await this.flush();
     return this._file || (this._file = await this._handle.getFile());
   }
 
@@ -207,12 +195,13 @@ class OpenFile {
 
   async write(data: Uint8Array) {
     let writer = await this._getWriter();
-    await writer.write(this.position, data);
+    await writer.write({ type: 'write', position: this.position, data });
     this.position += data.length;
   }
 
   async flush() {
-    await this._writer?.close();
+    if (!this._writer) return;
+    await this._writer.close();
     this._writer = undefined;
     this._file = undefined;
   }
@@ -222,7 +211,7 @@ class OpenFile {
   }
 
   asDir(): never {
-    throw new SystemError(E.NOTDIR, this.path);
+    throw new SystemError(E.NOTDIR);
   }
 
   close() {
@@ -256,7 +245,7 @@ export class OpenFiles {
     if (fd >= FIRST_PREOPEN_FD && fd < this._firstNonPreopenFd) {
       return this.get(fd) as OpenDirectory;
     } else {
-      throw new SystemError(E.BADF, fd);
+      throw new SystemError(E.BADF);
     }
   }
 
@@ -280,13 +269,23 @@ export class OpenFiles {
   get(fd: fd_t) {
     let openFile = this._files.get(fd);
     if (!openFile) {
-      throw new SystemError(E.BADF, fd);
+      throw new SystemError(E.BADF);
     }
     return openFile;
   }
 
-  async close(fd: fd_t) {
-    await this.get(fd).close();
+  private _take(fd: fd_t) {
+    let handle = this.get(fd);
     this._files.delete(fd);
+    return handle;
+  }
+
+  async renumber(from: fd_t, to: fd_t) {
+    await this.close(to);
+    this._files.set(to, this._take(from));
+  }
+
+  async close(fd: fd_t) {
+    await this._take(fd).close();
   }
 }

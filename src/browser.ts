@@ -1,4 +1,4 @@
-import Bindings, { EXIT } from './bindings.js';
+import Bindings, { ExitStatus } from './bindings.js';
 
 // @ts-ignore
 import * as Asyncify from '../node_modules/asyncify-wasm/dist/asyncify.mjs';
@@ -55,16 +55,22 @@ document.getElementById('openDir')!.addEventListener('click', async () => {
         });
         let { exports } = await Asyncify.instantiate(await wasmModule, {
           env: {
-            sync() { throw new Error('unreachable') }
+            sync() {
+              throw new Error('unreachable');
+            }
           },
           wasi_unstable: bindings.getWasiImports()
         });
         bindings.memory = exports.memory;
         args = '';
         await exports._start();
-      } catch (e) {
-        if (e !== EXIT) {
-          term.writeln(e.message);
+      } catch (err) {
+        if (err instanceof ExitStatus) {
+          if (err.statusCode !== 0) {
+            term.writeln(`Exit code: ${err.statusCode}`);
+          }
+        } else {
+          term.writeln(err.message);
         }
       }
       prompt();

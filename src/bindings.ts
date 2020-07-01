@@ -1,8 +1,25 @@
 import { OpenFiles, FileOrDir, FIRST_PREOPEN_FD } from './fileSystem.js';
 
+export enum E {
+  SUCCESS = 0,
+  ACCES = 2,
+  BADF = 8,
+  CANCELED = 11,
+  EXIST = 20,
+  INVAL = 28,
+  ISDIR = 31,
+  NOENT = 44,
+  NOSYS = 52,
+  NOTDIR = 54,
+  NOTEMPTY = 55,
+  NOTCAPABLE = 76
+}
+
 type ptr<T> = number & { _pointerTarget: T };
 
-export const EXIT = Symbol();
+export class ExitStatus {
+  constructor(public statusCode: number) {}
+}
 
 interface TypeInfo {
   size: number;
@@ -83,7 +100,7 @@ function alignTo(ptr: number, align: number): number {
 
 function struct<T extends Record<string, WritableType<any>>>(
   desc: T
-): ReadableType<
+): WritableType<
   { [K in keyof T]: T[K] extends WritableType<infer F> ? F : never }
 > {
   class Ctor {
@@ -113,6 +130,48 @@ function struct<T extends Record<string, WritableType<any>>>(
     align: structAlign,
     get(buf, ptr) {
       return new Ctor(buf, ptr) as any;
+    },
+    set(buf, ptr, value) {
+      Object.assign(new Ctor(buf, ptr), value);
+    }
+  };
+}
+
+function taggedUnion<E extends number, T extends Record<E, WritableType<any>>>({
+  tag: tagDesc,
+  data: dataDesc
+}: {
+  tag: WritableType<E>;
+  data: T;
+}): WritableType<
+  {
+    [K in E]: { tag: K; data: T[K] extends WritableType<infer F> ? F : never };
+  }[E]
+> {
+  let unionSize = 0;
+  let unionAlign = 0;
+  for (let key in dataDesc) {
+    let { size, align } = dataDesc[key];
+    unionSize = Math.max(unionSize, size);
+    unionAlign = Math.max(unionAlign, align);
+  }
+  unionSize = alignTo(unionSize, unionAlign);
+  const unionOffset = alignTo(tagDesc.size, unionAlign);
+  const totalAlign = Math.max(tagDesc.align, unionAlign);
+  const totalSize = alignTo(unionOffset + unionSize, totalAlign);
+  return {
+    size: totalSize,
+    align: totalAlign,
+    get(buf, ptr) {
+      let tag = tagDesc.get(buf, ptr as ptr<any>);
+      return {
+        tag,
+        data: dataDesc[tag].get(buf, (ptr + unionOffset) as ptr<any>)
+      };
+    },
+    set(buf, ptr, value) {
+      tagDesc.set(buf, ptr as ptr<any>, value.tag);
+      dataDesc[value.tag].set(buf, (ptr + unionOffset) as ptr<any>, value.data);
     }
   };
 }
@@ -191,7 +250,7 @@ type dirent_t = TargetType<typeof dirent_t>;
 
 const device_t = uint64_t;
 
-const linkcount_t = uint32_t;
+const linkcount_t = uint64_t;
 
 const filesize_t = uint64_t;
 
@@ -217,23 +276,69 @@ const enum ClockId {
 }
 const clockid_t = enumer<ClockId>(uint32_t);
 
-export enum E {
-  SUCCESS = 0,
-  ACCES = 2,
-  BADF = 8,
-  CANCELED = 11,
-  EXIST = 20,
-  INVAL = 28,
-  ISDIR = 31,
-  NOENT = 44,
-  NOSYS = 52,
-  NOTDIR = 54,
-  NOTEMPTY = 55
+const userdata_t = uint64_t;
+
+const enum EventType {
+  Clock,
+  FdRead,
+  FdWrite
 }
+const eventtype_t = enumer<EventType>(uint8_t);
+
+const enum SubclockFlags {
+  Relative,
+  Absolute
+}
+const subclockflags_t = enumer<SubclockFlags>(uint16_t);
+
+const subscription_clock_t = struct({
+  id: clockid_t,
+  timeout: timestamp_t,
+  precision: timestamp_t,
+  flags: subclockflags_t
+});
+
+const subscription_fd_readwrite_t = struct({
+  fd: fd_t
+});
+
+const subscription_union_t = taggedUnion({
+  tag: eventtype_t,
+  data: {
+    [EventType.Clock]: subscription_clock_t,
+    [EventType.FdRead]: subscription_fd_readwrite_t,
+    [EventType.FdWrite]: subscription_fd_readwrite_t
+  }
+});
+
+const subscription_t = struct({
+  userdata: userdata_t,
+  union: subscription_union_t
+});
+type subscription_t = TargetType<typeof subscription_t>;
+
+const enum EventRwFlags {
+  None,
+  FdReadWriteHangup
+}
+const event_rw_flags_t = enumer<EventRwFlags>(uint16_t);
+
+const event_fd_readwrite_t = struct({
+  nbytes: filesize_t,
+  flags: event_rw_flags_t
+});
+
+const event_t = struct({
+  userdata: userdata_t,
+  error: enumer<E>(uint16_t),
+  type: eventtype_t,
+  fd_readwrite: event_fd_readwrite_t
+});
+type event_t = TargetType<typeof event_t>;
 
 export class SystemError extends Error {
-  constructor(public readonly code: E, public readonly value?: any) {
-    super(`E${E[code]}` + (value ? ` with value ${value}` : ''));
+  constructor(public readonly code: E) {
+    super(`E${E[code]}`);
   }
 }
 
@@ -372,29 +477,31 @@ export default class Bindings {
   }
 
   private _getFileStat(file: File | undefined, filestatPtr: ptr<filestat_t>) {
-    let filestat = filestat_t.get(this._getBuffer(), filestatPtr);
-    filestat.dev = 0n;
-    filestat.ino = 0n; // TODO
-    filestat.filetype = file ? FileType.RegularFile : FileType.Directory;
-    filestat.nlink = 0;
-    // https://github.com/DefinitelyTyped/DefinitelyTyped/issues/30471#issuecomment-480900510
+    let size = 0n;
+    let time = 0n;
     if (file) {
-      filestat.size = BigInt(file.size);
-      filestat.accessTime = filestat.modTime = filestat.changeTime =
-        BigInt(file.lastModified) * 1_000_000n;
-    } else {
-      filestat.size = filestat.accessTime = filestat.modTime = filestat.changeTime = 0n;
+      size = BigInt(file.size);
+      time = BigInt(file.lastModified) * 1_000_000n;
     }
+    filestat_t.set(this._getBuffer(), filestatPtr, {
+      dev: 0n,
+      ino: 0n, // TODO
+      filetype: file ? FileType.RegularFile : FileType.Directory,
+      nlink: 0n,
+      size,
+      accessTime: time,
+      modTime: time,
+      changeTime: time
+    });
   }
 
-  getWasiImports(): {
-    [key: string]: (...args: any[]) => void | E | Promise<void | E>;
-  } {
+  getWasiImports(): Record<string, (...args: any[]) => void | Promise<void>> {
     const bindings = {
       fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
-        let prestat = prestat_t.get(this._getBuffer(), prestatPtr);
-        prestat.type = PreOpenType.Dir;
-        prestat.nameLen = this._openFiles.getPreOpen(fd).path.length;
+        prestat_t.set(this._getBuffer(), prestatPtr, {
+          type: PreOpenType.Dir,
+          nameLen: this._openFiles.getPreOpen(fd).path.length
+        });
       },
       fd_prestat_dir_name: (
         fd: fd_t,
@@ -436,12 +543,7 @@ export default class Bindings {
         string.set(this._getBuffer(), argvBufPtr, this._argBuf);
       },
       proc_exit: (code: number) => {
-        if (code != 0) {
-          this._stdErr.write(
-            new TextEncoder().encode(`Exited with code ${code}.\n`)
-          );
-        }
-        throw EXIT;
+        throw new ExitStatus(code);
       },
       random_get: (bufPtr: ptr<Uint8Array>, bufLen: number) => {
         crypto.getRandomValues(
@@ -459,6 +561,12 @@ export default class Bindings {
         fsFlags: FdFlags,
         fdPtr: ptr<fd_t>
       ) => {
+        if (fsFlags & FdFlags.NonBlock) {
+          console.warn(
+            'Asked for non-blocking mode while opening the file, falling back to blocking one.'
+          );
+          fsFlags &= ~FdFlags.NonBlock;
+        }
         if (fsFlags != 0) {
           unimplemented();
         }
@@ -520,17 +628,20 @@ export default class Bindings {
         });
       },
       fd_fdstat_get: async (fd: fd_t, fdstatPtr: ptr<fdstat_t>) => {
-        let fdstat = fdstat_t.get(this._getBuffer(), fdstatPtr);
-        fdstat.rightsBase = /* anything */ -1n;
-        fdstat.rightsInheriting = /* anything but symlink */ ~(1n << 24n);
-        fdstat.flags = 0;
+        let filetype;
         if (fd < FIRST_PREOPEN_FD) {
-          fdstat.filetype = FileType.CharacterDevice;
+          filetype = FileType.CharacterDevice;
+        } else if (this._openFiles.get(fd).isFile) {
+          filetype = FileType.RegularFile;
         } else {
-          fdstat.filetype = this._openFiles.get(fd).isFile
-            ? FileType.RegularFile
-            : FileType.Directory;
+          filetype = FileType.Directory;
         }
+        fdstat_t.set(this._getBuffer(), fdstatPtr, {
+          filetype,
+          flags: 0,
+          rightsBase: /* anything */ -1n,
+          rightsInheriting: /* anything but symlink */ ~(1n << 24n)
+        });
       },
       path_create_directory: async (
         dirFd: fd_t,
@@ -571,25 +682,24 @@ export default class Bindings {
         const initialBufPtr = bufPtr;
         let openDir = this._openFiles.get(fd).asDir();
         let counter = 0n;
-        for await (let item of openDir.getEntries()) {
+        for await (let { name, isFile } of openDir.getEntries()) {
           if (counter++ < cookie) {
             continue;
           }
-          let itemSize = dirent_t.size + item.name.length;
+          let itemSize = dirent_t.size + name.length;
           if (bufLen < itemSize) {
             break;
           }
-          let dirent = dirent_t.get(this._getBuffer(), bufPtr);
-          dirent.next = ++cookie;
-          dirent.ino = 0n; // TODO
-          dirent.nameLen = item.name.length;
-          dirent.type = item.isDirectory
-            ? FileType.Directory
-            : FileType.RegularFile;
+          dirent_t.set(this._getBuffer(), bufPtr, {
+            next: ++cookie,
+            ino: 0n, // TODO
+            nameLen: name.length,
+            type: isFile ? FileType.RegularFile : FileType.Directory
+          });
           string.set(
             this._getBuffer(),
             (bufPtr + dirent_t.size) as ptr<string>,
-            item.name
+            name
           );
           bufPtr = (bufPtr + itemSize) as ptr<dirent_t>;
           bufLen -= itemSize;
@@ -629,14 +739,13 @@ export default class Bindings {
         filesizePtr: ptr<bigint>
       ) => {
         let openFile = this._openFiles.get(fd).asFile();
-        let { size } = await openFile.getFile();
         let base: number;
         switch (whence) {
           case Whence.Current:
             base = openFile.position;
             break;
           case Whence.End:
-            base = size;
+            base = (await openFile.getFile()).size;
             break;
           case Whence.Set:
             base = 0;
@@ -663,12 +772,76 @@ export default class Bindings {
         this._openFiles
           .getPreOpen(dirFd)
           .delete(string.get(this._getBuffer(), pathPtr, pathLen)),
-      poll_oneoff: (
-        subscriptionPtr: ptr<any>,
-        eventsPtr: ptr<any>,
+      poll_oneoff: async (
+        subscriptionPtr: ptr<subscription_t>,
+        eventsPtr: ptr<event_t>,
         subscriptionsNum: number,
         eventsNumPtr: ptr<number>
-      ) => unimplemented(),
+      ) => {
+        if (subscriptionsNum === 0) {
+          throw new RangeError('Polling requires at least one subscription');
+        }
+        let eventsNum = 0;
+        const addEvent = (event: Partial<event_t>) => {
+          Object.assign(event_t.get(this._getBuffer(), eventsPtr), event);
+          eventsNum++;
+          eventsPtr = (eventsPtr + event_t.size) as ptr<event_t>;
+        };
+        let clockEvents: { timeout: number, extra: number, userdata: bigint }[] = [];
+        for (let i = 0; i < subscriptionsNum; i++) {
+          let { userdata, union } = subscription_t.get(
+            this._getBuffer(),
+            subscriptionPtr
+          );
+          subscriptionPtr = (subscriptionPtr + subscription_t.size) as ptr<
+            subscription_t
+          >;
+          switch (union.tag) {
+            case EventType.Clock: {
+              let timeout = Number(union.data.timeout) / 1_000_000;
+              if (union.data.flags === SubclockFlags.Absolute) {
+                let origin =
+                  union.data.id === ClockId.Realtime ? Date : performance;
+                timeout -= origin.now();
+              }
+              // This is not completely correct, since setTimeout doesn't give the required precision for monotonic clock.
+              clockEvents.push({
+                timeout,
+                extra: Number(union.data.precision) / 1_000_000,
+                userdata
+              });
+              break;
+            }
+            default: {
+              addEvent({
+                userdata,
+                error: E.NOSYS,
+                type: union.tag,
+                fd_readwrite: {
+                  nbytes: 0n,
+                  flags: EventRwFlags.None
+                }
+              });
+              break;
+            }
+          }
+        }
+        if (!eventsNum) {
+          clockEvents.sort((a, b) => a.timeout - b.timeout);
+          let wait = clockEvents[0].timeout + clockEvents[0].extra;
+          let matchingCount = clockEvents.findIndex(item => item.timeout > wait);
+          matchingCount = matchingCount === -1 ? clockEvents.length : matchingCount;
+          await new Promise(resolve => setTimeout(resolve, clockEvents[matchingCount - 1].timeout));
+          for (let i = 0; i < matchingCount; i++) {
+            addEvent({
+              userdata: clockEvents[i].userdata,
+              error: E.SUCCESS,
+              type: EventType.Clock,
+            });
+          }
+        }
+        size_t.set(this._getBuffer(), eventsNumPtr, eventsNum);
+      },
       path_link: (
         oldDirFd: fd_t,
         oldFlags: number,
@@ -687,7 +860,7 @@ export default class Bindings {
       },
       fd_filestat_set_size: async (fd: fd_t, newSize: bigint) =>
         this._openFiles.get(fd).asFile().setSize(Number(newSize)),
-      fd_renumber: (from: fd_t, to: fd_t) => unimplemented(),
+      fd_renumber: (from: fd_t, to: fd_t) => this._openFiles.renumber(from, to),
       path_symlink: (oldPath: ptr<string>, fd: fd_t, newPath: ptr<string>) =>
         unimplemented(),
       clock_time_get: (
@@ -717,37 +890,7 @@ export default class Bindings {
           try {
             return (await value(...args)) ?? E.SUCCESS;
           } catch (err) {
-            if (err instanceof SystemError) {
-              console.warn(err);
-              return err.code;
-            }
-            if (err instanceof DOMException) {
-              let code;
-              switch (err.name) {
-                case 'NotFoundError':
-                  code = E.NOENT;
-                  break;
-                case 'NotAllowedError':
-                case 'DataCloneError':
-                case 'SecurityError':
-                  code = E.ACCES;
-                  break;
-                case 'InvalidModificationError':
-                  code = E.NOTEMPTY;
-                  break;
-                case 'AbortError':
-                  code = E.CANCELED;
-                  break;
-              }
-              if (code) {
-                console.warn(err);
-                return code;
-              }
-            } else if (err instanceof TypeError || err instanceof RangeError) {
-              console.warn(err);
-              return E.INVAL;
-            }
-            throw err;
+            return translateError(err);
           }
         };
       }
@@ -773,4 +916,38 @@ export default class Bindings {
     }
     size_t.set(this._getBuffer(), handledPtr, totalHandled);
   }
+}
+
+function translateError(err: any): E {
+  if (err instanceof SystemError) {
+    console.warn(err);
+    return err.code;
+  }
+  if (err instanceof DOMException) {
+    let code;
+    switch (err.name) {
+      case 'NotFoundError':
+        code = E.NOENT;
+        break;
+      case 'NotAllowedError':
+      case 'DataCloneError':
+      case 'SecurityError':
+        code = E.ACCES;
+        break;
+      case 'InvalidModificationError':
+        code = E.NOTEMPTY;
+        break;
+      case 'AbortError':
+        code = E.CANCELED;
+        break;
+    }
+    if (code) {
+      console.warn(err);
+      return code;
+    }
+  } else if (err instanceof TypeError || err instanceof RangeError) {
+    console.warn(err);
+    return E.INVAL;
+  }
+  throw err;
 }
