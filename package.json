@@ -20,9 +20,12 @@
   "description": "",
   "dependencies": {
     "asyncify-wasm": "^1.0.2",
-    "xterm": "^4.3.0"
+    "local-echo": "github:wavesoft/local-echo",
+    "xterm": "^4.3.0",
+    "xterm-addon-fit": "^0.4.0"
   },
   "devDependencies": {
+    "@types/wicg-native-file-system": "^2020.6.0",
     "@types/node": "^13.1.8",
     "typescript": "^3.9.5"
   }
