@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import Bindings, { stringOut, bufferIn, ExitStatus } from './bindings.js';
-
-// @ts-ignore
-import * as Asyncify from '../node_modules/asyncify-wasm/dist/asyncify.mjs';
+import Bindings, { stringOut, bufferIn } from './bindings.js';
 
 const EOL = '\n';
 
@@ -98,59 +95,46 @@ runBtn.onclick = async () => {
           resultCell.textContent = 'Running... ';
           let actualStdout = '';
           let actualStderr = '';
-          let actualExitCode;
           try {
-            try {
-              let bindings = new Bindings({
-                preOpen: {
-                  '/sandbox': sandbox,
-                  '/tmp': tmp
-                },
-                stdin: bufferIn(textEncoder.encode(stdin)),
-                stdout: stringOut(text => (actualStdout += text)),
-                stderr: stringOut(text => (actualStderr += text)),
-                args: ['foo', '-bar', '--baz=value'],
-                env: {
-                  NODE_PLATFORM: 'win32'
-                }
-              });
-              let {
-                exports: { _start, memory }
-              } = await Asyncify.instantiate(await module, {
-                wasi_snapshot_preview1: bindings.getWasiImports()
-              });
-              bindings.memory = memory;
-              await _start();
-              actualExitCode = 0;
-              if (actualStdout !== stdout) {
-                throw new Error(
-                  `Expected stdout: ${JSON.stringify(
-                    stdout
-                  )}\nActual stdout: ${JSON.stringify(actualStdout)}`
-                );
+            let actualExitCode = await new Bindings({
+              preOpen: {
+                '/sandbox': sandbox,
+                '/tmp': tmp
+              },
+              stdin: bufferIn(textEncoder.encode(stdin)),
+              stdout: stringOut(text => (actualStdout += text)),
+              stderr: stringOut(text => (actualStderr += text)),
+              args: ['foo', '-bar', '--baz=value'],
+              env: {
+                NODE_PLATFORM: 'win32'
               }
-              if (actualStderr !== '') {
-                throw new Error(
-                  `Unexpected stderr: ${JSON.stringify(actualStderr)}`
-                );
-              }
-            } catch (err) {
-              if (err instanceof ExitStatus) {
-                actualExitCode = err.statusCode;
-              } else if (err instanceof WebAssembly.RuntimeError) {
-                throw new Error(actualStderr || 'Wasm failed');
-              } else {
-                throw err;
-              }
-            }
+            }).run(await module);
             if (actualExitCode !== exitCode) {
               throw new Error(
                 `Expected exit code: ${exitCode}\nActual exit code: ${actualExitCode}`
               );
             }
+            if (actualStdout !== stdout) {
+              throw new Error(
+                `Expected stdout: ${JSON.stringify(
+                  stdout
+                )}\nActual stdout: ${JSON.stringify(actualStdout)}`
+              );
+            }
+            if (actualStderr !== '') {
+              throw new Error(
+                `Unexpected stderr: ${JSON.stringify(actualStderr)}`
+              );
+            }
             resultCell.textContent = 'OK';
           } catch (err) {
-            resultCell.textContent = `NOT OK: ${err.stack}`;
+            let message;
+            if (err instanceof WebAssembly.RuntimeError) {
+              message = `Wasm failed on \`unreachable\`:\n${actualStderr}`;
+            } else {
+              message = err.message;
+            }
+            resultCell.textContent = `NOT OK: ${message}`;
           }
         }
       )

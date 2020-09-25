@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { OpenFiles, FileOrDir, FIRST_PREOPEN_FD } from './fileSystem.js';
+// @ts-ignore
+import { instantiate } from '../node_modules/asyncify-wasm/dist/asyncify.mjs';
 
 export enum E {
   SUCCESS = 0,
@@ -909,6 +911,24 @@ export default class Bindings {
         };
       }
     });
+  }
+
+  async run(module: WebAssembly.Module): Promise<number> {
+    let {
+      exports: { _start, memory }
+    } = await instantiate(module, {
+      wasi_snapshot_preview1: this.getWasiImports()
+    });
+    this.memory = memory;
+    try {
+      await _start();
+      return 0;
+    } catch (err) {
+      if (err instanceof ExitStatus) {
+        return err.statusCode;
+      }
+      throw err;
+    }
   }
 
   private async _forEachIoVec(

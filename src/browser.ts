@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import Bindings, { ExitStatus } from './bindings.js';
-
-// @ts-ignore
-import * as Asyncify from '../node_modules/asyncify-wasm/dist/asyncify.mjs';
+import Bindings from './bindings.js';
 
 declare const Terminal: typeof import('xterm').Terminal;
 declare const LocalEchoController: any;
 declare const FitAddon: any;
 
 (async () => {
-  const wasmModule = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
+  const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
 
   let term = new Terminal();
   let fitAddon = new FitAddon.FitAddon();
@@ -49,7 +46,6 @@ declare const FitAddon: any;
   const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gy;
 
   let preOpen: Record<string, FileSystemDirectoryHandle> = {};
-  let env = '/';
 
   term.open(document.body);
 
@@ -70,7 +66,7 @@ declare const FitAddon: any;
       if (!args[0]) {
         continue;
       }
-      let bindings = new Bindings({
+      let statusCode = await new Bindings({
         preOpen,
         stdout,
         stderr: stdout,
@@ -78,25 +74,12 @@ declare const FitAddon: any;
         env: {
           RUST_BACKTRACE: '1'
         }
-      });
-      let { exports } = await Asyncify.instantiate(await wasmModule, {
-        env: {
-          sync() {
-            throw new Error('unreachable');
-          }
-        },
-        wasi_snapshot_preview1: bindings.getWasiImports()
-      });
-      bindings.memory = exports.memory;
-      await exports._start();
-    } catch (err) {
-      if (err instanceof ExitStatus) {
-        if (err.statusCode !== 0) {
-          term.writeln(`Exit code: ${err.statusCode}`);
-        }
-      } else {
-        term.writeln(err.message);
+      }).run(await module);
+      if (statusCode !== 0) {
+        term.writeln(`Exit code: ${statusCode}`);
       }
+    } catch (err) {
+      term.writeln(err.message);
     }
   }
 })();
