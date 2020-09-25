@@ -20,7 +20,7 @@
   "description": "",
   "dependencies": {
     "asyncify-wasm": "^1.0.2",
-    "local-echo": "github:wavesoft/local-echo",
+    "local-echo": "github:RReverser/local-echo",
     "xterm": "^4.3.0",
     "xterm-addon-fit": "^0.4.0"
   },
