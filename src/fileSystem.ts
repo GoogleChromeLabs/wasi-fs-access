@@ -176,8 +176,8 @@ class OpenFile {
   isFile!: true;
 
   public position = 0;
-  private _file: File | undefined;
-  private _writer: FileSystemWritableFileStream | undefined;
+  private _file: File | undefined = undefined;
+  private _writer: FileSystemWritableFileStream | undefined = undefined;
 
   async getFile() {
     // TODO: do we really have to?
