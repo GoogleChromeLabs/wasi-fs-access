@@ -424,14 +424,38 @@ function unimplemented() {
   throw new SystemError(E.NOSYS);
 }
 
+class StringCollection {
+  private readonly _offsets: Uint32Array;
+  private readonly _buffer: string;
+
+  constructor(strings: string[]) {
+    this._offsets = new Uint32Array(strings.length);
+    this._buffer = '';
+
+    for (let [i, s] of strings.entries()) {
+      this._offsets[i] = this._buffer.length;
+      this._buffer += `${s}\0`;
+    }
+  }
+
+  sizes_get(buf: ArrayBuffer, countPtr: ptr<number>, sizePtr: ptr<number>) {
+    size_t.set(buf, countPtr, this._offsets.length);
+    size_t.set(buf, sizePtr, this._buffer.length);
+  }
+
+  get(buf: ArrayBuffer, offsetsPtr: ptr<Uint32Array>, ptr: ptr<string>) {
+    new Uint32Array(buf, offsetsPtr, this._offsets.length).set(
+      this._offsets.map((offset) => ptr + offset)
+    );
+    string.set(buf, ptr, this._buffer);
+  }
+}
+
 export default class Bindings {
   private _openFiles: OpenFiles;
 
-  private _argOffsets: Uint32Array;
-  private _argBuf: string;
-
-  private _envOffsets: Uint32Array;
-  private _envBuf: string;
+  private _args: StringCollection;
+  private _env: StringCollection;
 
   private _stdIn: In;
   private _stdOut: Out;
@@ -453,33 +477,11 @@ export default class Bindings {
     env?: Record<string, string>;
   }) {
     this._openFiles = new OpenFiles(preOpen);
-
-    // Set args.
-    {
-      this._argOffsets = new Uint32Array(args.length);
-      this._argBuf = '';
-      for (let [i, arg] of args.entries()) {
-        this._argOffsets[i] = this._argBuf.length;
-        this._argBuf += `${arg}\0`;
-      }
-    }
-
-    // Set env.
-    {
-      let pairs = Object.entries(env);
-
-      this._envOffsets = new Uint32Array(pairs.length);
-      this._envBuf = '';
-
-      for (let [i, [key, value]] of pairs.entries()) {
-        this._envOffsets[i] = this._envBuf.length;
-        this._envBuf += `${key}=${value}\0`;
-      }
-    }
-
     this._stdIn = stdin;
     this._stdOut = stdout;
     this._stdErr = stderr;
+    this._args = new StringCollection(['uutils', ...args]);
+    this._env = new StringCollection(Object.entries(env).map(([key, value]) => `${key}=${value}`));
   }
 
   memory: WebAssembly.Memory | undefined;
@@ -531,33 +533,14 @@ export default class Bindings {
           pathLen
         );
       },
-      environ_sizes_get: (countPtr: ptr<number>, sizePtr: ptr<number>) => {
-        size_t.set(this._getBuffer(), countPtr, this._envOffsets.length);
-        size_t.set(this._getBuffer(), sizePtr, this._envBuf.length);
-      },
-      environ_get: (
-        environPtr: ptr<Uint32Array>,
-        environBufPtr: ptr<string>
-      ) => {
-        new Uint32Array(
-          this._getBuffer(),
-          environPtr,
-          this._envOffsets.length
-        ).set(this._envOffsets.map(offset => environBufPtr + offset));
-        string.set(this._getBuffer(), environBufPtr, this._envBuf);
-      },
-      args_sizes_get: (argcPtr: ptr<number>, argvBufSizePtr: ptr<number>) => {
-        size_t.set(this._getBuffer(), argcPtr, this._argOffsets.length);
-        size_t.set(this._getBuffer(), argvBufSizePtr, this._argBuf.length);
-      },
-      args_get: (argvPtr: ptr<Uint32Array>, argvBufPtr: ptr<string>) => {
-        new Uint32Array(
-          this._getBuffer(),
-          argvPtr,
-          this._argOffsets.length
-        ).set(this._argOffsets.map(offset => argvBufPtr + offset));
-        string.set(this._getBuffer(), argvBufPtr, this._argBuf);
-      },
+      environ_sizes_get: (countPtr: ptr<number>, sizePtr: ptr<number>) =>
+        this._env.sizes_get(this._getBuffer(), countPtr, sizePtr),
+      environ_get: (environPtr: ptr<Uint32Array>, environBufPtr: ptr<string>) =>
+        this._env.get(this._getBuffer(), environPtr, environBufPtr),
+      args_sizes_get: (argcPtr: ptr<number>, argvBufSizePtr: ptr<number>) =>
+        this._args.sizes_get(this._getBuffer(), argcPtr, argvBufSizePtr),
+      args_get: (argvPtr: ptr<Uint32Array>, argvBufPtr: ptr<string>) =>
+        this._args.get(this._getBuffer(), argvPtr, argvBufPtr),
       proc_exit: (code: number) => {
         throw new ExitStatus(code);
       },
