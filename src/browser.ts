@@ -53,14 +53,16 @@ declare const FitAddon: any;
   onresize = () => fitAddon.fit();
 
   while (true) {
-    let line = (await localEcho.read('$ '));
+    let line = await localEcho.read('$ ');
     let args = Array.from(
       line.matchAll(cmdParser),
       ([, s1, s2, s3]) => s1 ?? s2 ?? s3
     );
     try {
       if (args[0] === 'mount') {
-        preOpen[args[1]] = await chooseFileSystemEntries({ type: 'open-directory' });
+        preOpen[args[1]] = await chooseFileSystemEntries({
+          type: 'open-directory'
+        });
         continue;
       }
       if (!args[0]) {

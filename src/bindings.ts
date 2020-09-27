@@ -445,7 +445,7 @@ class StringCollection {
 
   get(buf: ArrayBuffer, offsetsPtr: ptr<Uint32Array>, ptr: ptr<string>) {
     new Uint32Array(buf, offsetsPtr, this._offsets.length).set(
-      this._offsets.map((offset) => ptr + offset)
+      this._offsets.map(offset => ptr + offset)
     );
     string.set(buf, ptr, this._buffer);
   }
@@ -481,7 +481,9 @@ export default class Bindings {
     this._stdOut = stdout;
     this._stdErr = stderr;
     this._args = new StringCollection(['uutils', ...args]);
-    this._env = new StringCollection(Object.entries(env).map(([key, value]) => `${key}=${value}`));
+    this._env = new StringCollection(
+      Object.entries(env).map(([key, value]) => `${key}=${value}`)
+    );
   }
 
   memory: WebAssembly.Memory | undefined;
@@ -786,7 +788,11 @@ export default class Bindings {
           eventsNum++;
           eventsPtr = (eventsPtr + event_t.size) as ptr<event_t>;
         };
-        let clockEvents: { timeout: number, extra: number, userdata: bigint }[] = [];
+        let clockEvents: {
+          timeout: number;
+          extra: number;
+          userdata: bigint;
+        }[] = [];
         for (let i = 0; i < subscriptionsNum; i++) {
           let { userdata, union } = subscription_t.get(
             this._getBuffer(),
@@ -828,14 +834,19 @@ export default class Bindings {
         if (!eventsNum) {
           clockEvents.sort((a, b) => a.timeout - b.timeout);
           let wait = clockEvents[0].timeout + clockEvents[0].extra;
-          let matchingCount = clockEvents.findIndex(item => item.timeout > wait);
-          matchingCount = matchingCount === -1 ? clockEvents.length : matchingCount;
-          await new Promise(resolve => setTimeout(resolve, clockEvents[matchingCount - 1].timeout));
+          let matchingCount = clockEvents.findIndex(
+            item => item.timeout > wait
+          );
+          matchingCount =
+            matchingCount === -1 ? clockEvents.length : matchingCount;
+          await new Promise(resolve =>
+            setTimeout(resolve, clockEvents[matchingCount - 1].timeout)
+          );
           for (let i = 0; i < matchingCount; i++) {
             addEvent({
               userdata: clockEvents[i].userdata,
               error: E.SUCCESS,
-              type: EventType.Clock,
+              type: EventType.Clock
             });
           }
         }

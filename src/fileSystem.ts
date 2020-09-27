@@ -61,12 +61,12 @@ class OpenDirectory {
 
   getFileOrDir(
     path: string,
-    mode: FileOrDir,
+    mode: FileOrDir.File,
     openFlags?: OpenFlags
   ): Promise<FileSystemFileHandle>;
   getFileOrDir(
     path: string,
-    mode: FileOrDir,
+    mode: FileOrDir.Dir,
     openFlags?: OpenFlags
   ): Promise<FileSystemDirectoryHandle>;
   getFileOrDir(
@@ -236,9 +236,9 @@ class OpenFile {
 OpenFile.prototype.isFile = true;
 
 export const enum FileOrDir {
-  File = 1 << 0,
-  Dir = 1 << 1,
-  Any = File | Dir
+  File = 1, // 1 << 0
+  Dir = 2, // 1 << 1
+  Any = 3 // File | Dir
 }
 
 export const FIRST_PREOPEN_FD = 3 as fd_t;
