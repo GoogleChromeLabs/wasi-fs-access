@@ -37,20 +37,15 @@ export class ExitStatus {
   constructor(public statusCode: number) {}
 }
 
-interface TypeInfo {
+interface TypeDesc<T> {
   size: number;
   align: number;
-}
 
-interface ReadableType<T> extends TypeInfo {
   get(buf: ArrayBuffer, ptr: ptr<T>): T;
-}
-
-interface WritableType<T> extends ReadableType<T> {
   set(buf: ArrayBuffer, ptr: ptr<T>, value: T): void;
 }
 
-type TargetType<I> = I extends ReadableType<infer T> ? T : never;
+type TargetType<D> = D extends TypeDesc<infer T> ? T : never;
 
 const getDataView = (() => {
   const cache = new WeakMap<ArrayBuffer, DataView>();
@@ -65,7 +60,7 @@ const getDataView = (() => {
   };
 })();
 
-function std<T = number>(name: string, size: number): WritableType<T> {
+function std<T = number>(name: string, size: number): TypeDesc<T> {
   let get = DataView.prototype[`get${name}`];
   let set = DataView.prototype[`set${name}`];
 
@@ -114,10 +109,10 @@ function alignTo(ptr: number, align: number): number {
   return ptr;
 }
 
-function struct<T extends Record<string, WritableType<any>>>(
+function struct<T extends Record<string, TypeDesc<any>>>(
   desc: T
-): WritableType<
-  { [K in keyof T]: T[K] extends WritableType<infer F> ? F : never }
+): TypeDesc<
+  { [K in keyof T]: T[K] extends TypeDesc<infer F> ? F : never }
 > {
   class Ctor {
     constructor(protected _buf: ArrayBuffer, protected _ptr: number) {}
@@ -153,15 +148,15 @@ function struct<T extends Record<string, WritableType<any>>>(
   };
 }
 
-function taggedUnion<E extends number, T extends Record<E, WritableType<any>>>({
+function taggedUnion<E extends number, T extends Record<E, TypeDesc<any>>>({
   tag: tagDesc,
   data: dataDesc
 }: {
-  tag: WritableType<E>;
+  tag: TypeDesc<E>;
   data: T;
-}): WritableType<
+}): TypeDesc<
   {
-    [K in E]: { tag: K; data: T[K] extends WritableType<infer F> ? F : never };
+    [K in E]: { tag: K; data: T[K] extends TypeDesc<infer F> ? F : never };
   }[E]
 > {
   let unionSize = 0;
@@ -192,9 +187,9 @@ function taggedUnion<E extends number, T extends Record<E, WritableType<any>>>({
   };
 }
 
-function enumer<E extends number>(base: WritableType<number>): WritableType<E> {
+function enumer<E extends number>(base: TypeDesc<number>): TypeDesc<E> {
   // All the properties are same as for the underlying number, this wrapper is only useful at typechecking level.
-  return base as WritableType<E>;
+  return base as TypeDesc<E>;
 }
 
 const int8_t = std('Int8', 1);
@@ -220,7 +215,7 @@ const prestat_t = struct({
 type prestat_t = TargetType<typeof prestat_t>;
 
 export type fd_t = number & { _name: 'fd' };
-export const fd_t = uint32_t as WritableType<fd_t>;
+export const fd_t = uint32_t as TypeDesc<fd_t>;
 
 const iovec_t = struct({
   bufPtr: uint32_t,
