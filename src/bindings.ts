@@ -515,8 +515,8 @@ export default class Bindings {
     });
   }
 
-  getWasiImports(): Record<string, (...args: any[]) => void | Promise<void>> {
-    const bindings = {
+  getWasiImports() {
+    const bindings: Record<string, (...args: any[]) => void | Promise<void>> = {
       fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
         prestat_t.set(this._getBuffer(), prestatPtr, {
           type: PreOpenType.Dir,
@@ -898,7 +898,8 @@ export default class Bindings {
         }
         return async (...args: any[]) => {
           try {
-            return (await value(...args)) ?? E.SUCCESS;
+            await value(...args);
+            return E.SUCCESS;
           } catch (err) {
             return translateError(err);
           }
