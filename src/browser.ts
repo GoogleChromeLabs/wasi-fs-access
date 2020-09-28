@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import Bindings from './bindings.js';
+import Bindings, { OpenFlags } from './bindings.js';
+import { FileOrDir, OpenFiles } from './fileSystem.js';
 
 declare const Terminal: typeof import('xterm').Terminal;
 declare const LocalEchoController: any;
@@ -43,7 +44,7 @@ declare const FitAddon: any;
     }
   };
 
-  const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gy;
+  const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gysu;
 
   let preOpen: Record<string, FileSystemDirectoryHandle> = {};
 
@@ -59,24 +60,39 @@ declare const FitAddon: any;
       ([, s1, s2, s3]) => s1 ?? s2 ?? s3
     );
     try {
+      if (!args.length) {
+        continue;
+      }
+      if (args[0] === 'help') {
+        args[0] = '--help';
+      }
       if (args[0] === 'mount') {
         preOpen[args[1]] = await chooseFileSystemEntries({
           type: 'open-directory'
         });
         continue;
       }
-      if (!args[0]) {
-        continue;
+      let openFiles = new OpenFiles(preOpen);
+      let redirectedStdout;
+      if (args[args.length - 2] === '>') {
+        let path = args.pop();
+        let { preOpen, relativePath } = openFiles.findRelPath(path);
+        args.pop(); // '>'
+        let handle = await preOpen.getFileOrDir(relativePath, FileOrDir.File, OpenFlags.Create);
+        redirectedStdout = await handle.createWritable();
       }
       let statusCode = await new Bindings({
-        preOpen,
-        stdout,
+        openFiles,
+        stdout: redirectedStdout ?? stdout,
         stderr: stdout,
         args,
         env: {
           RUST_BACKTRACE: '1'
         }
       }).run(await module);
+      if (redirectedStdout) {
+        await redirectedStdout.close();
+      }
       if (statusCode !== 0) {
         term.writeln(`Exit code: ${statusCode}`);
       }

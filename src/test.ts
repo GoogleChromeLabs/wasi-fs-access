@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import Bindings, { stringOut, bufferIn } from './bindings.js';
+import { OpenFiles } from './fileSystem.js';
 
 const EOL = '\n';
 
@@ -97,10 +98,10 @@ runBtn.onclick = async () => {
           let actualStderr = '';
           try {
             let actualExitCode = await new Bindings({
-              preOpen: {
+              openFiles: new OpenFiles({
                 '/sandbox': sandbox,
                 '/tmp': tmp
-              },
+              }),
               stdin: bufferIn(textEncoder.encode(stdin)),
               stdout: stringOut(text => (actualStdout += text)),
               stderr: stringOut(text => (actualStderr += text)),

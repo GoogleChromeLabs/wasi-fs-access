@@ -302,4 +302,80 @@ export class OpenFiles {
   async close(fd: fd_t) {
     await this._take(fd).close();
   }
+
+  // Translation of the algorithm from __wasilibc_find_relpath.
+  findRelPath(path: string) {
+    /// Are the `prefix_len` bytes pointed to by `prefix` a prefix of `path`?
+    function prefixMatches(prefix: string, path: string) {
+      // Allow an empty string as a prefix of any relative path.
+      if (path[0] != '/' && !prefix) {
+        return true;
+      }
+
+      // Check whether any bytes of the prefix differ.
+      if (!path.startsWith(prefix)) {
+        return false;
+      }
+
+      // Ignore trailing slashes in directory names.
+      let i = prefix.length;
+      while (i > 0 && prefix[i - 1] == '/') {
+        --i;
+      }
+
+      // Match only complete path components.
+      let last = path[i];
+      return last === '/' || last === '\0';
+    }
+
+    // Search through the preopens table. Iterate in reverse so that more
+    // recently added preopens take precedence over less recently addded ones.
+    let matchLen = 0;
+    let foundPre;
+    for (let i = this._firstNonPreopenFd - 1; i >= FIRST_PREOPEN_FD; --i) {
+      let pre = this.get(i as fd_t) as OpenDirectory;
+      let prefix = pre.path;
+
+      if (path !== '.' && !path.startsWith('./')) {
+        // We're matching a relative path that doesn't start with "./" and
+        // isn't ".".
+        if (prefix.startsWith('./')) {
+          prefix = prefix.slice(2);
+        } else if (prefix === '.') {
+          prefix = prefix.slice(1);
+        }
+      }
+
+      // If we haven't had a match yet, or the candidate path is longer than
+      // our current best match's path, and the candidate path is a prefix of
+      // the requested path, take that as the new best path.
+      if (
+        (!foundPre || prefix.length > matchLen) &&
+        prefixMatches(prefix, path)
+      ) {
+        foundPre = pre;
+        matchLen = prefix.length;
+      }
+    }
+
+    if (!foundPre) {
+      throw new Error(
+        `Couldn't resolve the given path via preopened directories.`
+      );
+    }
+
+    // The relative path is the substring after the portion that was matched.
+    let computed = path.slice(matchLen);
+
+    // Omit leading slashes in the relative path.
+    computed = computed.replace(/^\/+/, '');
+
+    // *at syscalls don't accept empty relative paths, so use "." instead.
+    computed = computed || '.';
+
+    return {
+      preOpen: foundPre,
+      relativePath: computed
+    };
+  }
 }

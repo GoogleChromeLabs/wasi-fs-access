@@ -457,21 +457,21 @@ export default class Bindings {
   private _stdErr: Out;
 
   constructor({
-    preOpen,
+    openFiles,
     stdin = { read: () => new Uint8Array() },
     stdout = lineOut(console.log),
     stderr = lineOut(console.error),
     args = [],
     env = {}
   }: {
-    preOpen: Record<string, FileSystemDirectoryHandle>;
+    openFiles: OpenFiles;
     stdin?: In;
     stdout?: Out;
     stderr?: Out;
     args?: string[];
     env?: Record<string, string>;
   }) {
-    this._openFiles = new OpenFiles(preOpen);
+    this._openFiles = openFiles;
     this._stdIn = stdin;
     this._stdOut = stdout;
     this._stdErr = stderr;
