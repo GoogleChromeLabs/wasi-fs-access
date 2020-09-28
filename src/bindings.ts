@@ -589,15 +589,9 @@ export default class Bindings {
         iovsLen: number,
         nreadPtr: ptr<number>
       ) => {
-        let read: (len: number) => Promise<Uint8Array>;
-        if (fd === 0) {
-          read = async len => this._stdIn.read(len);
-        } else {
-          let openFile = this._openFiles.get(fd).asFile();
-          read = len => openFile.read(len);
-        }
+        let input = fd === 0 ? this._stdIn : this._openFiles.get(fd).asFile();
         await this._forEachIoVec(iovsPtr, iovsLen, nreadPtr, async buf => {
-          let chunk = await read(buf.length);
+          let chunk = await input.read(buf.length);
           buf.set(chunk);
           return chunk.length;
         });
