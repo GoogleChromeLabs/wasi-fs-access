@@ -19,14 +19,13 @@
   "homepage": "https://github.com/GoogleChromeLabs/wasi-fs-access#readme",
   "description": "",
   "dependencies": {
-    "asyncify-wasm": "^1.0.2",
+    "asyncify-wasm": "^1.1.1",
     "local-echo": "github:RReverser/local-echo",
-    "xterm": "^4.3.0",
+    "xterm": "^4.9.0",
     "xterm-addon-fit": "^0.4.0"
   },
   "devDependencies": {
     "@types/wicg-native-file-system": "^2020.6.0",
-    "@types/node": "^13.1.8",
-    "typescript": "^3.9.5"
+    "typescript": "^4.0.3"
   }
 }
