@@ -20,6 +20,7 @@ import { OpenFiles } from './fileSystem.js';
     term.loadAddon(fitAddon);
     let localEcho = new LocalEchoController();
     term.loadAddon(localEcho);
+    term.loadAddon(new WebLinksAddon.WebLinksAddon());
     const stdout = {
         async write(data) {
             let startIndex = 0;
@@ -37,13 +38,18 @@ import { OpenFiles } from './fileSystem.js';
         type: 'sandbox'
     });
     term.open(document.body);
-    term.writeln('Welcome to a shell powered by WebAssembly, WASI and File System Access API!');
+    term.writeln('# Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!');
+    term.writeln('# Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access');
     term.writeln('');
-    term.writeln('Right now you have /sandbox mounted to a persistent sandbox filesystem.');
-    term.writeln('To mount a real directory, type "mount /some/path".');
-    term.writeln('To view a list of commands, type "help".');
+    term.writeln('# Right now you have /sandbox mounted to a persistent sandbox filesystem:');
+    term.writeln('$ df -a');
+    term.writeln('Filesystem          1k-blocks         Used    Available  Use% Mounted on');
+    term.writeln('wasi                        0            0            0     - /sandbox');
     term.writeln('');
-    term.writeln('Happy hacking!');
+    term.writeln('# To mount a real directory, type "mount /some/path".');
+    term.writeln('# To view a list of other commands, type "help".');
+    term.writeln('# Happy hacking!');
+    term.writeln('');
     fitAddon.fit();
     onresize = () => fitAddon.fit();
     while (true) {
