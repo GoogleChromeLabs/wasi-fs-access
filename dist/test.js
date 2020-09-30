@@ -61,8 +61,8 @@ runBtn.onclick = async () => {
             type: 'open-directory'
         });
         let [sandbox, tmp] = await Promise.all([
-            rootHandle.getDirectory('sandbox'),
-            rootHandle.getDirectory('tmp').then(async (tmp) => {
+            rootHandle.getDirectoryHandle('sandbox'),
+            rootHandle.getDirectoryHandle('tmp').then(async (tmp) => {
                 let promises = [];
                 for await (let entry of tmp.getEntries()) {
                     promises.push(tmp.removeEntry(entry.name, { recursive: true }));

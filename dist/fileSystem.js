@@ -24,7 +24,7 @@ class OpenDirectory {
         return this;
     }
     getEntries() {
-        return this._handle.getEntries();
+        return this._handle.values();
     }
     async _resolve(path) {
         let parts = path ? path.split('/') : [];
@@ -42,7 +42,7 @@ class OpenDirectory {
         let name = resolvedParts.pop();
         let parent = this._handle;
         for (let item of resolvedParts) {
-            parent = await parent.getDirectory(item);
+            parent = await parent.getDirectoryHandle(item);
         }
         return {
             parent,
@@ -71,7 +71,7 @@ class OpenDirectory {
         async function openWithCreate(create) {
             if (mode & 1 /* File */) {
                 try {
-                    return await parent.getFile(name, { create });
+                    return await parent.getFileHandle(name, { create });
                 }
                 catch (err) {
                     if (err.name === 'TypeMismatchError') {
@@ -86,7 +86,7 @@ class OpenDirectory {
                 }
             }
             try {
-                return await parent.getDirectory(name, { create });
+                return await parent.getDirectoryHandle(name, { create });
             }
             catch (err) {
                 if (err.name === 'TypeMismatchError') {

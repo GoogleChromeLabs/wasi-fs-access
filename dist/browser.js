@@ -13,6 +13,20 @@
 // limitations under the License.
 import Bindings from './bindings.js';
 import { OpenFiles } from './fileSystem.js';
+if (!navigator.storage.getDirectory) {
+    navigator.storage.getDirectory = () => FileSystemDirectoryHandle.getSystemDirectory({
+        type: 'sandbox'
+    });
+}
+if (!FileSystemDirectoryHandle.prototype.getDirectoryHandle) {
+    FileSystemDirectoryHandle.prototype.getDirectoryHandle = FileSystemDirectoryHandle.prototype.getDirectory;
+}
+if (!FileSystemDirectoryHandle.prototype.getFileHandle) {
+    FileSystemDirectoryHandle.prototype.getFileHandle = FileSystemDirectoryHandle.prototype.getFile;
+}
+if (!FileSystemDirectoryHandle.prototype.values) {
+    FileSystemDirectoryHandle.prototype.values = FileSystemDirectoryHandle.prototype.getEntries;
+}
 (async () => {
     const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
     let term = new Terminal();
@@ -34,9 +48,7 @@ import { OpenFiles } from './fileSystem.js';
     };
     const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
     let preOpen = {};
-    preOpen['/sandbox'] = await FileSystemDirectoryHandle.getSystemDirectory({
-        type: 'sandbox'
-    });
+    preOpen['/sandbox'] = await navigator.storage.getDirectory();
     term.open(document.body);
     term.writeln('# Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!');
     term.writeln('# Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access');
