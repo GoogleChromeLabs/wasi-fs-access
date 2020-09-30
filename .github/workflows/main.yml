@@ -21,11 +21,12 @@ jobs:
         run: |
           npm install
           npm run build
+          mkdir deploy
+          mv index.html uutils.async.wasm dist node_modules deploy
 
       - name: Deploy 🚀
         uses: JamesIves/github-pages-deploy-action@3.6.2
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: gh-pages # The branch the action should deploy to.
-          FOLDER: . # The folder the action should deploy.
-          CLEAN: false
+          FOLDER: deploy # The folder the action should deploy.
