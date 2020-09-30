@@ -1,22 +1,22 @@
 {
-  "name": "native-fs-wasi2",
+  "name": "wasi-fs-access",
   "version": "1.0.0",
-  "main": "index.js",
+  "private": true,
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -p . -w"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RReverser/native-fs-wasi.git"
+    "url": "git+https://github.com/GoogleChromeLabs/wasi-fs-access.git"
   },
   "keywords": [],
   "author": "Ingvar Stepanyan <rreverser@google.com>",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/RReverser/native-fs-wasi/issues"
+    "url": "https://github.com/GoogleChromeLabs/wasi-fs-access/issues"
   },
-  "homepage": "https://github.com/RReverser/native-fs-wasi#readme",
+  "homepage": "https://github.com/GoogleChromeLabs/wasi-fs-access#readme",
   "description": "",
   "dependencies": {
     "asyncify-wasm": "^1.0.2",
