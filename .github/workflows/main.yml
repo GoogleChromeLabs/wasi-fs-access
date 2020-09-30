@@ -23,6 +23,7 @@ jobs:
           npm run build
           mkdir deploy
           mv index.html uutils.async.wasm dist node_modules deploy
+          touch deploy/.nojekyll
 
       - name: Deploy 🚀
         uses: JamesIves/github-pages-deploy-action@3.6.2
