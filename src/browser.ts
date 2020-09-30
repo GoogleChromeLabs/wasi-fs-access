@@ -44,11 +44,22 @@ declare const FitAddon: any;
     }
   };
 
-  const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gysu;
+  const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
 
   let preOpen: Record<string, FileSystemDirectoryHandle> = {};
+  preOpen['/sandbox'] = await FileSystemDirectoryHandle.getSystemDirectory({
+    type: 'sandbox'
+  });
 
   term.open(document.body);
+
+  term.writeln('Welcome to a shell powered by WebAssembly, WASI and File System Access API!');
+  term.writeln('');
+  term.writeln('Right now you have /sandbox mounted to a persistent sandbox filesystem.');
+  term.writeln('To mount a real directory, type "mount /some/path".');
+  term.writeln('To view a list of commands, type "help".');
+  term.writeln('');
+  term.writeln('Happy hacking!');
 
   fitAddon.fit();
   onresize = () => fitAddon.fit();
@@ -78,7 +89,11 @@ declare const FitAddon: any;
         let path = args.pop();
         let { preOpen, relativePath } = openFiles.findRelPath(path);
         args.pop(); // '>'
-        let handle = await preOpen.getFileOrDir(relativePath, FileOrDir.File, OpenFlags.Create);
+        let handle = await preOpen.getFileOrDir(
+          relativePath,
+          FileOrDir.File,
+          OpenFlags.Create
+        );
         redirectedStdout = await handle.createWritable();
       }
       let statusCode = await new Bindings({
