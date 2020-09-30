@@ -20,6 +20,31 @@ declare const LocalEchoController: any;
 declare const FitAddon: typeof import('xterm-addon-fit');
 declare const WebLinksAddon: typeof import('xterm-addon-web-links');
 
+// Polyfills for new APIs on stable Chrome.
+declare global {
+  interface StorageManager {
+    getDirectory(): Promise<FileSystemDirectoryHandle>;
+  }
+  interface FileSystemDirectoryHandle {
+    getFileHandle: FileSystemDirectoryHandle['getFile'];
+    getDirectoryHandle: FileSystemDirectoryHandle['getDirectory'];
+  }
+}
+if (!navigator.storage.getDirectory) {
+  navigator.storage.getDirectory = () => FileSystemDirectoryHandle.getSystemDirectory({
+    type: 'sandbox'
+  });
+}
+if (!(FileSystemDirectoryHandle as any).prototype.getDirectoryHandle) {
+  (FileSystemDirectoryHandle as any).prototype.getDirectoryHandle = (FileSystemDirectoryHandle as any).prototype.getDirectory;
+}
+if (!(FileSystemDirectoryHandle as any).prototype.getFileHandle) {
+  (FileSystemDirectoryHandle as any).prototype.getFileHandle = (FileSystemDirectoryHandle as any).prototype.getFile;
+}
+if (!(FileSystemDirectoryHandle as any).prototype.values) {
+  (FileSystemDirectoryHandle as any).prototype.values = (FileSystemDirectoryHandle as any).prototype.getEntries;
+}
+
 (async () => {
   const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
 
@@ -49,9 +74,7 @@ declare const WebLinksAddon: typeof import('xterm-addon-web-links');
   const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
 
   let preOpen: Record<string, FileSystemDirectoryHandle> = {};
-  preOpen['/sandbox'] = await FileSystemDirectoryHandle.getSystemDirectory({
-    type: 'sandbox'
-  });
+  preOpen['/sandbox'] = await navigator.storage.getDirectory();
 
   term.open(document.body);
 
