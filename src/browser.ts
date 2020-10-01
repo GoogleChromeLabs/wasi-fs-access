@@ -121,7 +121,6 @@ globalThis.showDirectoryPicker ??= () =>
         );
         redirectedStdout = await handle.createWritable();
       }
-      console.time(line);
       let statusCode = await new Bindings({
         openFiles,
         stdout: redirectedStdout ?? stdout,
@@ -131,7 +130,6 @@ globalThis.showDirectoryPicker ??= () =>
           RUST_BACKTRACE: '1'
         }
       }).run(await module);
-      console.timeEnd(line);
       if (redirectedStdout) {
         await redirectedStdout.close();
       }
