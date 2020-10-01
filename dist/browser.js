@@ -86,7 +86,6 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
                 let handle = await preOpen.getFileOrDir(relativePath, 1 /* File */, 1 /* Create */);
                 redirectedStdout = await handle.createWritable();
             }
-            console.time(line);
             let statusCode = await new Bindings({
                 openFiles,
                 stdout: redirectedStdout ?? stdout,
@@ -96,7 +95,6 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
                     RUST_BACKTRACE: '1'
                 }
             }).run(await module);
-            console.timeEnd(line);
             if (redirectedStdout) {
                 await redirectedStdout.close();
             }
