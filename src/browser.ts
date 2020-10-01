@@ -109,6 +109,11 @@ globalThis.showDirectoryPicker ??= () =>
         preOpen[args[1]] = await showDirectoryPicker();
         continue;
       }
+      if (args[0] === 'cd') {
+        term.writeln('Unfortunately, WASI doesn\'t have a concept of current working directory.');
+        term.writeln('Please pass absolute paths to all commands.');
+        continue;
+      }
       let openFiles = new OpenFiles(preOpen);
       let redirectedStdout;
       if (args[args.length - 2] === '>') {
