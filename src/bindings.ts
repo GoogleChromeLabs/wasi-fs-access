@@ -669,20 +669,20 @@ export default class Bindings {
       ) => {
         const initialBufPtr = bufPtr;
         let openDir = this._openFiles.get(fd).asDir();
-        let counter = 0n;
-        for await (let { name, isFile } of openDir.getEntries()) {
-          if (counter++ < cookie) {
-            continue;
-          }
+        let pos = Number(cookie);
+        let entries = openDir.getEntries(pos);
+        for await (let handle of entries) {
+          let { name } = handle;
           let itemSize = dirent_t.size + name.length;
           if (bufLen < itemSize) {
+            entries.revert(handle);
             break;
           }
           dirent_t.set(this._getBuffer(), bufPtr, {
             next: ++cookie,
             ino: 0n, // TODO
             nameLen: name.length,
-            type: isFile ? FileType.RegularFile : FileType.Directory
+            type: handle.isFile ? FileType.RegularFile : FileType.Directory
           });
           string.set(
             this._getBuffer(),
