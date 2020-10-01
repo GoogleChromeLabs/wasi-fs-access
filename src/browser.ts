@@ -29,8 +29,9 @@ FileSystemDirectoryHandle.prototype.getDirectoryHandle ??=
   FileSystemDirectoryHandle.prototype.getDirectory;
 FileSystemDirectoryHandle.prototype.getFileHandle ??=
   FileSystemDirectoryHandle.prototype.getFile;
-FileSystemDirectoryHandle.prototype.values ??=
-  FileSystemDirectoryHandle.prototype.getEntries;
+FileSystemDirectoryHandle.prototype.values ??= function (this: FileSystemDirectoryHandle) {
+  return this.getEntries()[Symbol.asyncIterator]();
+};
 globalThis.showDirectoryPicker ??= () =>
   chooseFileSystemEntries({
     type: 'open-directory'
