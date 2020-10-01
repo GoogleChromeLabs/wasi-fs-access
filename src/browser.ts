@@ -31,6 +31,10 @@ FileSystemDirectoryHandle.prototype.getFileHandle ??=
   FileSystemDirectoryHandle.prototype.getFile;
 FileSystemDirectoryHandle.prototype.values ??=
   FileSystemDirectoryHandle.prototype.getEntries;
+globalThis.showDirectoryPicker ??= () =>
+  chooseFileSystemEntries({
+    type: 'open-directory'
+  });
 
 (async () => {
   const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
@@ -105,9 +109,7 @@ FileSystemDirectoryHandle.prototype.values ??=
         args[0] = '--help';
       }
       if (args[0] === 'mount') {
-        preOpen[args[1]] = await chooseFileSystemEntries({
-          type: 'open-directory'
-        });
+        preOpen[args[1]] = await showDirectoryPicker();
         continue;
       }
       let openFiles = new OpenFiles(preOpen);
