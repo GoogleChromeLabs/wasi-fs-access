@@ -111,9 +111,7 @@ function alignTo(ptr: number, align: number): number {
 
 function struct<T extends Record<string, TypeDesc<any>>>(
   desc: T
-): TypeDesc<
-  { [K in keyof T]: T[K] extends TypeDesc<infer F> ? F : never }
-> {
+): TypeDesc<{ [K in keyof T]: T[K] extends TypeDesc<infer F> ? F : never }> {
   class Ctor {
     constructor(protected _buf: ArrayBuffer, protected _ptr: number) {}
   }

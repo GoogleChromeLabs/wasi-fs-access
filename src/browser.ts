@@ -21,28 +21,23 @@ declare const FitAddon: typeof import('xterm-addon-fit');
 declare const WebLinksAddon: typeof import('xterm-addon-web-links');
 
 // Polyfills for new APIs on stable Chrome.
-declare global {
-  interface StorageManager {
-    getDirectory(): Promise<FileSystemDirectoryHandle>;
-  }
-  interface FileSystemDirectoryHandle {
-    getFileHandle: FileSystemDirectoryHandle['getFile'];
-    getDirectoryHandle: FileSystemDirectoryHandle['getDirectory'];
-  }
-}
 if (!navigator.storage.getDirectory) {
-  navigator.storage.getDirectory = () => FileSystemDirectoryHandle.getSystemDirectory({
-    type: 'sandbox'
-  });
+  navigator.storage.getDirectory = () =>
+    FileSystemDirectoryHandle.getSystemDirectory({
+      type: 'sandbox'
+    });
 }
-if (!(FileSystemDirectoryHandle as any).prototype.getDirectoryHandle) {
-  (FileSystemDirectoryHandle as any).prototype.getDirectoryHandle = (FileSystemDirectoryHandle as any).prototype.getDirectory;
+if (!FileSystemDirectoryHandle.prototype.getDirectoryHandle) {
+  FileSystemDirectoryHandle.prototype.getDirectoryHandle =
+    FileSystemDirectoryHandle.prototype.getDirectory;
 }
-if (!(FileSystemDirectoryHandle as any).prototype.getFileHandle) {
-  (FileSystemDirectoryHandle as any).prototype.getFileHandle = (FileSystemDirectoryHandle as any).prototype.getFile;
+if (!FileSystemDirectoryHandle.prototype.getFileHandle) {
+  FileSystemDirectoryHandle.prototype.getFileHandle =
+    FileSystemDirectoryHandle.prototype.getFile;
 }
-if (!(FileSystemDirectoryHandle as any).prototype.values) {
-  (FileSystemDirectoryHandle as any).prototype.values = (FileSystemDirectoryHandle as any).prototype.getEntries;
+if (!FileSystemDirectoryHandle.prototype.values) {
+  FileSystemDirectoryHandle.prototype.values =
+    FileSystemDirectoryHandle.prototype.getEntries;
 }
 
 (async () => {
@@ -78,13 +73,23 @@ if (!(FileSystemDirectoryHandle as any).prototype.values) {
 
   term.open(document.body);
 
-  term.writeln('# Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!');
-  term.writeln('# Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access');
+  term.writeln(
+    '# Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!'
+  );
+  term.writeln(
+    '# Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access'
+  );
   term.writeln('');
-  term.writeln('# Right now you have /sandbox mounted to a persistent sandbox filesystem:');
+  term.writeln(
+    '# Right now you have /sandbox mounted to a persistent sandbox filesystem:'
+  );
   term.writeln('$ df -a');
-  term.writeln('Filesystem          1k-blocks         Used    Available  Use% Mounted on');
-  term.writeln('wasi                        0            0            0     - /sandbox');
+  term.writeln(
+    'Filesystem          1k-blocks         Used    Available  Use% Mounted on'
+  );
+  term.writeln(
+    'wasi                        0            0            0     - /sandbox'
+  );
   term.writeln('');
   term.writeln('# To mount a real directory, type "mount /some/path".');
   term.writeln('# To view a list of other commands, type "help".');
