@@ -13,20 +13,16 @@
 // limitations under the License.
 import Bindings from './bindings.js';
 import { OpenFiles } from './fileSystem.js';
-if (!navigator.storage.getDirectory) {
-    navigator.storage.getDirectory = () => FileSystemDirectoryHandle.getSystemDirectory({
-        type: 'sandbox'
-    });
-}
-if (!FileSystemDirectoryHandle.prototype.getDirectoryHandle) {
-    FileSystemDirectoryHandle.prototype.getDirectoryHandle = FileSystemDirectoryHandle.prototype.getDirectory;
-}
-if (!FileSystemDirectoryHandle.prototype.getFileHandle) {
-    FileSystemDirectoryHandle.prototype.getFileHandle = FileSystemDirectoryHandle.prototype.getFile;
-}
-if (!FileSystemDirectoryHandle.prototype.values) {
-    FileSystemDirectoryHandle.prototype.values = FileSystemDirectoryHandle.prototype.getEntries;
-}
+// Polyfills for new APIs on stable Chrome.
+navigator.storage.getDirectory ??= () => FileSystemDirectoryHandle.getSystemDirectory({
+    type: 'sandbox'
+});
+FileSystemDirectoryHandle.prototype.getDirectoryHandle ??=
+    FileSystemDirectoryHandle.prototype.getDirectory;
+FileSystemDirectoryHandle.prototype.getFileHandle ??=
+    FileSystemDirectoryHandle.prototype.getFile;
+FileSystemDirectoryHandle.prototype.values ??=
+    FileSystemDirectoryHandle.prototype.getEntries;
 (async () => {
     const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
     let term = new Terminal();
