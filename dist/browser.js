@@ -44,32 +44,36 @@ catch {
     term.open(document.body);
     fitAddon.fit();
     onresize = () => fitAddon.fit();
-    term.writeln('# Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!');
-    term.writeln('# Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access');
-    term.writeln('');
+    function writeIndented(s) {
+        term.write(s.trimStart().replace(/\n +/g, '\r\n'));
+    }
+    writeIndented(`
+    # Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!
+    # Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access
+
+  `);
     if (!hasSupport) {
-        term.writeln('Looks like your browser doesn\'t have support for the File System Access API.');
-        term.writeln('Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.');
+        writeIndented(`
+      Looks like your browser doesn't have support for the File System Access API.
+      Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.
+    `);
         return;
     }
-    term.writeln('# Right now you have /sandbox mounted to a persistent sandbox filesystem:');
-    term.writeln('$ df -a');
-    term.writeln('Filesystem          1k-blocks         Used    Available  Use% Mounted on');
-    term.writeln('wasi                        0            0            0     - /sandbox');
-    term.writeln('');
-    term.writeln('# To mount a real directory, type "mount /some/path".');
-    term.writeln('# To view a list of other commands, type "help".');
-    term.writeln('# Happy hacking!');
-    term.writeln('');
+    writeIndented(`
+    # Right now you have /sandbox mounted to a persistent sandbox filesystem:
+    $ df -a
+    Filesystem          1k-blocks         Used    Available  Use% Mounted on
+    wasi                        0            0            0     - /sandbox
+
+    # To mount a real directory, type "mount /some/path".
+    # To view a list of other commands, type "help".
+    # Happy hacking!
+
+  `);
     const stdout = {
+        decoder: new TextDecoder(),
         write(data) {
-            let startIndex = 0;
-            let newLine;
-            while ((newLine = data.indexOf(10, startIndex)) !== -1) {
-                term.writeln(data.slice(startIndex, newLine));
-                startIndex = newLine + 1;
-            }
-            term.write(data.slice(startIndex));
+            term.write(this.decoder.decode(data, { stream: true }).replaceAll('\n', '\r\n'));
         }
     };
     const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
@@ -90,8 +94,10 @@ catch {
                 continue;
             }
             if (args[0] === 'cd') {
-                term.writeln("Unfortunately, WASI doesn't have a concept of current working directory.");
-                term.writeln('Please pass absolute paths to all commands.');
+                writeIndented(`
+          Unfortunately, WASI doesn't have a concept of current working directory.
+          Please pass absolute paths to all commands.
+        `);
                 continue;
             }
             let openFiles = new OpenFiles(preOpen);
