@@ -69,8 +69,12 @@ try {
   );
   term.writeln('');
   if (!hasSupport) {
-    term.writeln('Looks like your browser doesn\'t have support for the File System Access API.');
-    term.writeln('Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.');
+    term.writeln(
+      "Looks like your browser doesn't have support for the File System Access API."
+    );
+    term.writeln(
+      'Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.'
+    );
     return;
   }
   term.writeln(
@@ -90,14 +94,11 @@ try {
   term.writeln('');
 
   const stdout = {
+    decoder: new TextDecoder(),
     write(data: Uint8Array) {
-      let startIndex = 0;
-      let newLine: number;
-      while ((newLine = data.indexOf(10, startIndex)) !== -1) {
-        term.writeln(data.slice(startIndex, newLine));
-        startIndex = newLine + 1;
-      }
-      term.write(data.slice(startIndex));
+      term.write(
+        this.decoder.decode(data, { stream: true }).replaceAll('\n', '\r\n')
+      );
     }
   };
 
