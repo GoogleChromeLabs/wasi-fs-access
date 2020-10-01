@@ -105,6 +105,7 @@ try {
 
   while (true) {
     let line = await localEcho.read('$ ');
+    localEcho.history.rewind();
     let args = Array.from(
       line.matchAll(cmdParser),
       ([, s1, s2, s3]) => s1 ?? s2 ?? s3
