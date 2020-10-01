@@ -47,18 +47,14 @@ globalThis.showDirectoryPicker ??= () =>
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
 
   const stdout = {
-    async write(data: Uint8Array) {
+    write(data: Uint8Array) {
       let startIndex = 0;
       let newLine: number;
       while ((newLine = data.indexOf(10, startIndex)) !== -1) {
-        await new Promise(resolve =>
-          term.writeln(data.subarray(startIndex, newLine), resolve)
-        );
+        term.writeln(data.slice(startIndex, newLine));
         startIndex = newLine + 1;
       }
-      await new Promise(resolve =>
-        term.write(data.subarray(startIndex), resolve)
-      );
+      term.write(data.slice(startIndex));
     }
   };
 
@@ -125,6 +121,7 @@ globalThis.showDirectoryPicker ??= () =>
         );
         redirectedStdout = await handle.createWritable();
       }
+      console.time(line);
       let statusCode = await new Bindings({
         openFiles,
         stdout: redirectedStdout ?? stdout,
@@ -134,6 +131,7 @@ globalThis.showDirectoryPicker ??= () =>
           RUST_BACKTRACE: '1'
         }
       }).run(await module);
+      console.timeEnd(line);
       if (redirectedStdout) {
         await redirectedStdout.close();
       }
