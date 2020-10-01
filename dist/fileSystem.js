@@ -16,6 +16,7 @@ class OpenDirectory {
     constructor(path, _handle) {
         this.path = path;
         this._handle = _handle;
+        this._currentIter = undefined;
     }
     asFile() {
         throw new SystemError(E.ISDIR);
@@ -23,8 +24,68 @@ class OpenDirectory {
     asDir() {
         return this;
     }
-    getEntries() {
-        return this._handle.values();
+    getEntries(start = 0) {
+        if (this._currentIter?.pos !== start) {
+            // We're at incorrect position and will have to skip [start] items.
+            this._currentIter = {
+                pos: 0,
+                reverted: undefined,
+                iter: this._handle.values()
+            };
+        }
+        else {
+            // We are already at correct position, so zero this out.
+            start = 0;
+        }
+        let currentIter = this._currentIter;
+        return {
+            next: async () => {
+                // This is a rare case when the caller tries to start reading directory
+                // from a different position than our iterator is on.
+                //
+                // This can happen e.g. with multiple iterators, or if previous iteration
+                // has been cancelled.
+                //
+                // In those cases, we need to first manually skip [start] items from the
+                // iterator, and on the next calls we'll be able to continue normally.
+                for (; start; start--) {
+                    await currentIter.iter.next();
+                }
+                // If there is a handle saved by a `revert(...)` call, take and return it.
+                let { reverted } = currentIter;
+                if (reverted) {
+                    currentIter.reverted = undefined;
+                    currentIter.pos++;
+                    return {
+                        value: reverted,
+                        done: false
+                    };
+                }
+                // Otherwise use the underlying iterator.
+                let res = await currentIter.iter.next();
+                if (!res.done) {
+                    currentIter.pos++;
+                }
+                return res;
+            },
+            // This function allows to go one step back in the iterator
+            // by saving an item in an internal buffer.
+            // That item will be given back on the next iteration attempt.
+            //
+            // This allows to avoid having to restart the underlying
+            // forward iterator over and over again just to find the required
+            // position.
+            revert: (handle) => {
+                if (currentIter.reverted || currentIter.pos === 0) {
+                    throw new Error('Cannot revert a handle in the current state.');
+                }
+                currentIter.pos--;
+                currentIter.reverted = handle;
+            },
+            [Symbol.asyncIterator]() {
+                return this;
+            }
+        };
     }
     async _resolve(path) {
         let parts = path ? path.split('/') : [];

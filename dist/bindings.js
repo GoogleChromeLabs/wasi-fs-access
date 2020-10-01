@@ -416,20 +416,20 @@ export default class Bindings {
             fd_readdir: async (fd, bufPtr, bufLen, cookie, bufUsedPtr) => {
                 const initialBufPtr = bufPtr;
                 let openDir = this._openFiles.get(fd).asDir();
-                let counter = 0n;
-                for await (let { name, isFile } of openDir.getEntries()) {
-                    if (counter++ < cookie) {
-                        continue;
-                    }
+                let pos = Number(cookie);
+                let entries = openDir.getEntries(pos);
+                for await (let handle of entries) {
+                    let { name } = handle;
                     let itemSize = dirent_t.size + name.length;
                     if (bufLen < itemSize) {
+                        entries.revert(handle);
                         break;
                     }
                     dirent_t.set(this._getBuffer(), bufPtr, {
                         next: ++cookie,
                         ino: 0n,
                         nameLen: name.length,
-                        type: isFile ? 4 /* RegularFile */ : 3 /* Directory */
+                        type: handle.isFile ? 4 /* RegularFile */ : 3 /* Directory */
                     });
                     string.set(this._getBuffer(), (bufPtr + dirent_t.size), name);
                     bufPtr = (bufPtr + itemSize);

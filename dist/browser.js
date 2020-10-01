@@ -35,14 +35,14 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
     term.loadAddon(localEcho);
     term.loadAddon(new WebLinksAddon.WebLinksAddon());
     const stdout = {
-        async write(data) {
+        write(data) {
             let startIndex = 0;
             let newLine;
             while ((newLine = data.indexOf(10, startIndex)) !== -1) {
-                await new Promise(resolve => term.writeln(data.subarray(startIndex, newLine), resolve));
+                term.writeln(data.slice(startIndex, newLine));
                 startIndex = newLine + 1;
             }
-            await new Promise(resolve => term.write(data.subarray(startIndex), resolve));
+            term.write(data.slice(startIndex));
         }
     };
     const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
@@ -86,6 +86,7 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
                 let handle = await preOpen.getFileOrDir(relativePath, 1 /* File */, 1 /* Create */);
                 redirectedStdout = await handle.createWritable();
             }
+            console.time(line);
             let statusCode = await new Bindings({
                 openFiles,
                 stdout: redirectedStdout ?? stdout,
@@ -95,6 +96,7 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
                     RUST_BACKTRACE: '1'
                 }
             }).run(await module);
+            console.timeEnd(line);
             if (redirectedStdout) {
                 await redirectedStdout.close();
             }
