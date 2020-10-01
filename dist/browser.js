@@ -14,19 +14,25 @@
 import Bindings from './bindings.js';
 import { OpenFiles } from './fileSystem.js';
 // Polyfills for new APIs on stable Chrome.
-navigator.storage.getDirectory ??= () => FileSystemDirectoryHandle.getSystemDirectory({
-    type: 'sandbox'
-});
-FileSystemDirectoryHandle.prototype.getDirectoryHandle ??=
-    FileSystemDirectoryHandle.prototype.getDirectory;
-FileSystemDirectoryHandle.prototype.getFileHandle ??=
-    FileSystemDirectoryHandle.prototype.getFile;
-FileSystemDirectoryHandle.prototype.values ??= function () {
-    return this.getEntries()[Symbol.asyncIterator]();
-};
-globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
-    type: 'open-directory'
-});
+let hasSupport = true;
+try {
+    navigator.storage.getDirectory ??= () => FileSystemDirectoryHandle.getSystemDirectory({
+        type: 'sandbox'
+    });
+    FileSystemDirectoryHandle.prototype.getDirectoryHandle ??=
+        FileSystemDirectoryHandle.prototype.getDirectory;
+    FileSystemDirectoryHandle.prototype.getFileHandle ??=
+        FileSystemDirectoryHandle.prototype.getFile;
+    FileSystemDirectoryHandle.prototype.values ??= function () {
+        return this.getEntries()[Symbol.asyncIterator]();
+    };
+    globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
+        type: 'open-directory'
+    });
+}
+catch {
+    hasSupport = false;
+}
 (async () => {
     const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
     let term = new Terminal();
@@ -35,6 +41,26 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
     let localEcho = new LocalEchoController();
     term.loadAddon(localEcho);
     term.loadAddon(new WebLinksAddon.WebLinksAddon());
+    term.open(document.body);
+    fitAddon.fit();
+    onresize = () => fitAddon.fit();
+    term.writeln('# Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!');
+    term.writeln('# Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access');
+    term.writeln('');
+    if (!hasSupport) {
+        term.writeln('Looks like your browser doesn\'t have support for the File System Access API.');
+        term.writeln('Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.');
+        return;
+    }
+    term.writeln('# Right now you have /sandbox mounted to a persistent sandbox filesystem:');
+    term.writeln('$ df -a');
+    term.writeln('Filesystem          1k-blocks         Used    Available  Use% Mounted on');
+    term.writeln('wasi                        0            0            0     - /sandbox');
+    term.writeln('');
+    term.writeln('# To mount a real directory, type "mount /some/path".');
+    term.writeln('# To view a list of other commands, type "help".');
+    term.writeln('# Happy hacking!');
+    term.writeln('');
     const stdout = {
         write(data) {
             let startIndex = 0;
@@ -49,21 +75,6 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
     const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
     let preOpen = {};
     preOpen['/sandbox'] = await navigator.storage.getDirectory();
-    term.open(document.body);
-    term.writeln('# Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!');
-    term.writeln('# Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access');
-    term.writeln('');
-    term.writeln('# Right now you have /sandbox mounted to a persistent sandbox filesystem:');
-    term.writeln('$ df -a');
-    term.writeln('Filesystem          1k-blocks         Used    Available  Use% Mounted on');
-    term.writeln('wasi                        0            0            0     - /sandbox');
-    term.writeln('');
-    term.writeln('# To mount a real directory, type "mount /some/path".');
-    term.writeln('# To view a list of other commands, type "help".');
-    term.writeln('# Happy hacking!');
-    term.writeln('');
-    fitAddon.fit();
-    onresize = () => fitAddon.fit();
     while (true) {
         let line = await localEcho.read('$ ');
         let args = Array.from(line.matchAll(cmdParser), ([, s1, s2, s3]) => s1 ?? s2 ?? s3);
@@ -79,7 +90,7 @@ globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
                 continue;
             }
             if (args[0] === 'cd') {
-                term.writeln('Unfortunately, WASI doesn\'t have a concept of current working directory.');
+                term.writeln("Unfortunately, WASI doesn't have a concept of current working directory.");
                 term.writeln('Please pass absolute paths to all commands.');
                 continue;
             }
