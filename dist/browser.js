@@ -81,24 +81,32 @@ catch {
     preOpen['/sandbox'] = await navigator.storage.getDirectory();
     while (true) {
         let line = await localEcho.read('$ ');
+        localEcho.history.rewind();
         let args = Array.from(line.matchAll(cmdParser), ([, s1, s2, s3]) => s1 ?? s2 ?? s3);
         try {
             if (!args.length) {
                 continue;
             }
-            if (args[0] === 'help') {
-                args[0] = '--help';
-            }
-            if (args[0] === 'mount') {
-                preOpen[args[1]] = await showDirectoryPicker();
-                continue;
-            }
-            if (args[0] === 'cd') {
-                writeIndented(`
-          Unfortunately, WASI doesn't have a concept of current working directory.
-          Please pass absolute paths to all commands.
-        `);
-                continue;
+            switch (args[0]) {
+                case 'help':
+                    args[0] = '--help';
+                    break;
+                case 'mount':
+                    preOpen[args[1]] = await showDirectoryPicker();
+                    continue;
+                case 'cd':
+                case 'pwd':
+                    writeIndented(`
+            Unfortunately, WASI doesn't have a concept of current working directory.
+            Please pass absolute paths to all commands.
+          `);
+                    continue;
+                case 'ln':
+                case 'link':
+                    writeIndented(`
+            Unfortunately, File System Access API doesn't support symlinks yet.
+          `);
+                    continue;
             }
             let openFiles = new OpenFiles(preOpen);
             let redirectedStdout;
