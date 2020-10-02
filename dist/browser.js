@@ -65,7 +65,7 @@ catch {
     Filesystem          1k-blocks         Used    Available  Use% Mounted on
     wasi                        0            0            0     - /sandbox
 
-    # To mount a real directory, type "mount /mount/path".
+    # To mount a real directory, type "mount /mount/point" and choose a source in the dialogue.
     # To view a list of other commands, type "help".
     # Happy hacking!
 
