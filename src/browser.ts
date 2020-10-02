@@ -83,7 +83,7 @@ try {
     Filesystem          1k-blocks         Used    Available  Use% Mounted on
     wasi                        0            0            0     - /sandbox
 
-    # To mount a real directory, type "mount /some/path".
+    # To mount a real directory, type "mount /mount/path".
     # To view a list of other commands, type "help".
     # Happy hacking!
 
@@ -125,7 +125,7 @@ try {
         case 'pwd':
           writeIndented(`
             Unfortunately, WASI doesn't have a concept of current working directory.
-            Please pass absolute paths to all commands.
+            Please pass absolute paths to all commands, e.g. "ls /some/path".
           `);
           continue;
         case 'ln':
