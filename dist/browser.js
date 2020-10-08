@@ -100,9 +100,16 @@ catch {
                 case 'help':
                     args[0] = '--help';
                     break;
-                case 'mount':
-                    preOpen[args[1]] = await showDirectoryPicker();
+                case 'mount': {
+                    let dest = args[1];
+                    if (!dest || dest === '--help') {
+                        term.writeln('Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.');
+                        continue;
+                    }
+                    let src = preOpen[dest] = await showDirectoryPicker();
+                    term.writeln(`Successfully mounted (...host path...)/${src.name} at ${dest}.`);
                     continue;
+                }
                 case 'cd':
                 case 'pwd':
                     writeIndented(`
