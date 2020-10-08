@@ -71,8 +71,18 @@ try {
   fitAddon.fit();
   onresize = () => fitAddon.fit();
 
+  const ANSI_GRAY = '\x1B[38;5;251m';
+  const ANSI_BLUE = '\x1B[34;1m';
+  const ANSI_RESET = '\x1B[0m';
+
   function writeIndented(s: string) {
-    term.write(s.trimStart().replace(/\n +/g, '\r\n'));
+    term.write(
+      s
+        .trimStart()
+        .replace(/\n +/g, '\r\n')
+        .replace(/https:\S+/g, ANSI_BLUE + '$&' + ANSI_RESET)
+        .replace(/^#.*$/gm, ANSI_GRAY + '$&' + ANSI_RESET)
+    );
   }
 
   writeIndented(`
@@ -82,7 +92,7 @@ try {
   `);
   if (!hasSupport) {
     writeIndented(`
-      Looks like your browser doesn't have support for the File System Access API.
+      Looks like your browser doesn't have support for the File System Access API yet.
       Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.
     `);
     return;
@@ -93,10 +103,14 @@ try {
     Filesystem          1k-blocks         Used    Available  Use% Mounted on
     wasi                        0            0            0     - /sandbox
 
-    # To mount a real directory, type "mount /mount/point" and choose a source in the dialogue.
-    # To view a list of other commands, type "help".
-    # Happy hacking!
+    # To mount a real directory, use command
+    $ mount /mount/point
+    # and choose a source in the dialogue.
 
+    # To view a list of other commands, use
+    $ help
+
+    # Happy hacking!
   `);
 
   const textEncoder = new TextEncoder();
