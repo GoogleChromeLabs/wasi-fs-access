@@ -682,7 +682,7 @@ export default class Bindings {
             next: ++cookie,
             ino: 0n, // TODO
             nameLen: name.length,
-            type: handle.isFile ? FileType.RegularFile : FileType.Directory
+            type: handle.kind === 'file' ? FileType.RegularFile : FileType.Directory
           });
           string.set(
             this._getBuffer(),

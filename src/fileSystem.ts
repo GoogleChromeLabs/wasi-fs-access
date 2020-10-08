@@ -337,7 +337,7 @@ export class OpenFiles {
   private _add(path: string, handle: Handle) {
     this._files.set(
       this._nextFd,
-      handle.isFile
+      handle.kind === 'file'
         ? new OpenFile(path, handle)
         : new OpenDirectory(path, handle)
     );

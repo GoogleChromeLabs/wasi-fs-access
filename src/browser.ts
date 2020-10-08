@@ -20,7 +20,7 @@ declare const LocalEchoController: any;
 declare const FitAddon: typeof import('xterm-addon-fit');
 declare const WebLinksAddon: typeof import('xterm-addon-web-links');
 
-// Polyfills for new APIs on stable Chrome.
+// Backports for new APIs to Chromium <=85.
 let hasSupport = true;
 try {
   navigator.storage.getDirectory ??= () =>
@@ -40,6 +40,13 @@ try {
     chooseFileSystemEntries({
       type: 'open-directory'
     });
+  if (!('kind' in FileSystemHandle.prototype)) {
+    Object.defineProperty(FileSystemHandle.prototype, 'kind', {
+      get(this: FileSystemHandle): FileSystemHandleKind {
+        return this.isFile ? 'file' : 'directory';
+      }
+    });
+  }
 } catch {
   hasSupport = false;
 }
