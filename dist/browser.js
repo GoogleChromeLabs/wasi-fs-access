@@ -53,8 +53,15 @@ catch {
     term.open(document.body);
     fitAddon.fit();
     onresize = () => fitAddon.fit();
+    const ANSI_GRAY = '\x1B[38;5;251m';
+    const ANSI_BLUE = '\x1B[34;1m';
+    const ANSI_RESET = '\x1B[0m';
     function writeIndented(s) {
-        term.write(s.trimStart().replace(/\n +/g, '\r\n'));
+        term.write(s
+            .trimStart()
+            .replace(/\n +/g, '\r\n')
+            .replace(/https:\S+/g, ANSI_BLUE + '$&' + ANSI_RESET)
+            .replace(/^#.*$/gm, ANSI_GRAY + '$&' + ANSI_RESET));
     }
     writeIndented(`
     # Welcome to a shell powered by WebAssembly, WASI, Asyncify and File System Access API!
@@ -63,7 +70,7 @@ catch {
   `);
     if (!hasSupport) {
         writeIndented(`
-      Looks like your browser doesn't have support for the File System Access API.
+      Looks like your browser doesn't have support for the File System Access API yet.
       Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.
     `);
         return;
@@ -74,15 +81,20 @@ catch {
     Filesystem          1k-blocks         Used    Available  Use% Mounted on
     wasi                        0            0            0     - /sandbox
 
-    # To mount a real directory, type "mount /mount/point" and choose a source in the dialogue.
-    # To view a list of other commands, type "help".
-    # Happy hacking!
+    # To mount a real directory, use command
+    $ mount /mount/point
+    # and choose a source in the dialogue.
 
+    # To view a list of other commands, use
+    $ help
+
+    # Happy hacking!
   `);
+    const textEncoder = new TextEncoder();
+    const textDecoder = new TextDecoder();
     const stdout = {
-        decoder: new TextDecoder(),
         write(data) {
-            term.write(this.decoder.decode(data, { stream: true }).replaceAll('\n', '\r\n'));
+            term.write(textDecoder.decode(data, { stream: true }).replaceAll('\n', '\r\n'));
         }
     };
     const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
@@ -106,7 +118,7 @@ catch {
                         term.writeln('Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.');
                         continue;
                     }
-                    let src = preOpen[dest] = await showDirectoryPicker();
+                    let src = (preOpen[dest] = await showDirectoryPicker());
                     term.writeln(`Successfully mounted (...host path...)/${src.name} at ${dest}.`);
                     continue;
                 }
@@ -133,20 +145,69 @@ catch {
                 let handle = await preOpen.getFileOrDir(relativePath, 1 /* File */, 1 /* Create */);
                 redirectedStdout = await handle.createWritable();
             }
-            let statusCode = await new Bindings({
-                openFiles,
-                stdout: redirectedStdout ?? stdout,
-                stderr: stdout,
-                args,
-                env: {
-                    RUST_BACKTRACE: '1'
+            localEcho.detach();
+            try {
+                let statusCode = await new Bindings({
+                    openFiles,
+                    stdin: {
+                        async read() {
+                            let onData;
+                            let line = '';
+                            try {
+                                await new Promise((resolve, reject) => {
+                                    onData = term.onData(s => {
+                                        // Ctrl+C
+                                        if (s === '\x03') {
+                                            return reject(new Error('^C'));
+                                        }
+                                        // Ctrl+D
+                                        if (s === '\x04') {
+                                            term.writeln('^D');
+                                            return resolve();
+                                        }
+                                        // Enter
+                                        if (s === '\r') {
+                                            term.writeln('');
+                                            line += '\n';
+                                            return resolve();
+                                        }
+                                        // Ignore other functional keys
+                                        if (s.charCodeAt(0) < 32) {
+                                            return;
+                                        }
+                                        // Backspace
+                                        if (s === '\x7F') {
+                                            term.write('\b \b');
+                                            line = line.slice(0, -1);
+                                            return;
+                                        }
+                                        term.write(s);
+                                        line += s;
+                                    });
+                                });
+                            }
+                            finally {
+                                onData.dispose();
+                            }
+                            return textEncoder.encode(line);
+                        }
+                    },
+                    stdout: redirectedStdout ?? stdout,
+                    stderr: stdout,
+                    args,
+                    env: {
+                        RUST_BACKTRACE: '1'
+                    }
+                }).run(await module);
+                if (statusCode !== 0) {
+                    term.writeln(`Exit code: ${statusCode}`);
                 }
-            }).run(await module);
-            if (redirectedStdout) {
-                await redirectedStdout.close();
             }
-            if (statusCode !== 0) {
-                term.writeln(`Exit code: ${statusCode}`);
+            finally {
+                localEcho.attach();
+                if (redirectedStdout) {
+                    await redirectedStdout.close();
+                }
             }
         }
         catch (err) {
