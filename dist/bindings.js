@@ -429,7 +429,7 @@ export default class Bindings {
                         next: ++cookie,
                         ino: 0n,
                         nameLen: name.length,
-                        type: handle.isFile ? 4 /* RegularFile */ : 3 /* Directory */
+                        type: handle.kind === 'file' ? 4 /* RegularFile */ : 3 /* Directory */
                     });
                     string.set(this._getBuffer(), (bufPtr + dirent_t.size), name);
                     bufPtr = (bufPtr + itemSize);

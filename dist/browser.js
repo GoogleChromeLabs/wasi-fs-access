@@ -13,7 +13,7 @@
 // limitations under the License.
 import Bindings from './bindings.js';
 import { OpenFiles } from './fileSystem.js';
-// Polyfills for new APIs on stable Chrome.
+// Backports for new APIs to Chromium <=85.
 let hasSupport = true;
 try {
     navigator.storage.getDirectory ??= () => FileSystemDirectoryHandle.getSystemDirectory({
@@ -29,6 +29,15 @@ try {
     globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
         type: 'open-directory'
     });
+    // @ts-expect-error
+    if (!('kind' in FileSystemHandle.prototype)) {
+        // @ts-expect-error
+        Object.defineProperty(FileSystemHandle.prototype, 'kind', {
+            get() {
+                return this.isFile ? 'file' : 'directory';
+            }
+        });
+    }
 }
 catch {
     hasSupport = false;
