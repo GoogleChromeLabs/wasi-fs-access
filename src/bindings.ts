@@ -716,7 +716,7 @@ export default class Bindings {
             FileOrDir.Any
           );
         return this._getFileStat(
-          handle.isFile ? await handle.getFile() : undefined,
+          handle.kind === 'file' ? await handle.getFile() : undefined,
           filestatPtr
         );
       },
