@@ -113,7 +113,7 @@ try {
   preOpen['/sandbox'] = await navigator.storage.getDirectory();
 
   while (true) {
-    let line = await localEcho.read('$ ');
+    let line: string = await localEcho.read('$ ');
     localEcho.history.rewind();
     let args = Array.from(
       line.matchAll(cmdParser),
@@ -127,9 +127,16 @@ try {
         case 'help':
           args[0] = '--help';
           break;
-        case 'mount':
-          preOpen[args[1]] = await showDirectoryPicker();
+        case 'mount': {
+          let dest = args[1];
+          if (!dest || dest === '--help') {
+            term.writeln('Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.');
+            continue;
+          }
+          let src = preOpen[dest] = await showDirectoryPicker();
+          term.writeln(`Successfully mounted (...host path...)/${src.name} at ${dest}.`);
           continue;
+        }
         case 'cd':
         case 'pwd':
           writeIndented(`
@@ -147,7 +154,7 @@ try {
       let openFiles = new OpenFiles(preOpen);
       let redirectedStdout;
       if (args[args.length - 2] === '>') {
-        let path = args.pop();
+        let path = args.pop()!;
         let { preOpen, relativePath } = openFiles.findRelPath(path);
         args.pop(); // '>'
         let handle = await preOpen.getFileOrDir(
