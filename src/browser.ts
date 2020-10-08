@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { IDisposable } from 'xterm';
 import Bindings, { OpenFlags } from './bindings.js';
 import { FileOrDir, OpenFiles } from './fileSystem.js';
 
@@ -98,11 +99,13 @@ try {
 
   `);
 
+  const textEncoder = new TextEncoder();
+  const textDecoder = new TextDecoder();
+
   const stdout = {
-    decoder: new TextDecoder(),
     write(data: Uint8Array) {
       term.write(
-        this.decoder.decode(data, { stream: true }).replaceAll('\n', '\r\n')
+        textDecoder.decode(data, { stream: true }).replaceAll('\n', '\r\n')
       );
     }
   };
@@ -130,11 +133,15 @@ try {
         case 'mount': {
           let dest = args[1];
           if (!dest || dest === '--help') {
-            term.writeln('Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.');
+            term.writeln(
+              'Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.'
+            );
             continue;
           }
-          let src = preOpen[dest] = await showDirectoryPicker();
-          term.writeln(`Successfully mounted (...host path...)/${src.name} at ${dest}.`);
+          let src = (preOpen[dest] = await showDirectoryPicker());
+          term.writeln(
+            `Successfully mounted (...host path...)/${src.name} at ${dest}.`
+          );
           continue;
         }
         case 'cd':
@@ -164,20 +171,67 @@ try {
         );
         redirectedStdout = await handle.createWritable();
       }
-      let statusCode = await new Bindings({
-        openFiles,
-        stdout: redirectedStdout ?? stdout,
-        stderr: stdout,
-        args,
-        env: {
-          RUST_BACKTRACE: '1'
+      localEcho.detach();
+      try {
+        let statusCode = await new Bindings({
+          openFiles,
+          stdin: {
+            async read() {
+              let onData: IDisposable;
+              let line = '';
+              try {
+                await new Promise((resolve, reject) => {
+                  onData = term.onData(s => {
+                    // Ctrl+C
+                    if (s === '\x03') {
+                      return reject(new Error('^C'));
+                    }
+                    // Ctrl+D
+                    if (s === '\x04') {
+                      term.writeln('^D');
+                      return resolve();
+                    }
+                    // Enter
+                    if (s === '\r') {
+                      term.writeln('');
+                      line += '\n';
+                      return resolve();
+                    }
+                    // Ignore other functional keys
+                    if (s.charCodeAt(0) < 32) {
+                      return;
+                    }
+                    // Backspace
+                    if (s === '\x7F') {
+                      term.write('\b \b');
+                      line = line.slice(0, -1);
+                      return;
+                    }
+                    term.write(s);
+                    line += s;
+                  });
+                });
+              } finally {
+                onData!.dispose();
+              }
+              return textEncoder.encode(line);
+            }
+          },
+          stdout: redirectedStdout ?? stdout,
+          stderr: stdout,
+          args,
+          env: {
+            RUST_BACKTRACE: '1'
+          }
+        }).run(await module);
+        if (statusCode !== 0) {
+          term.writeln(`Exit code: ${statusCode}`);
         }
-      }).run(await module);
-      if (redirectedStdout) {
-        await redirectedStdout.close();
-      }
-      if (statusCode !== 0) {
-        term.writeln(`Exit code: ${statusCode}`);
+      } finally {
+        localEcho.attach();
+        if (redirectedStdout) {
+          await redirectedStdout.close();
+        }
       }
     } catch (err) {
       term.writeln(err.message);
