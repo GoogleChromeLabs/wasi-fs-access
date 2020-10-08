@@ -12,7 +12,7 @@ Since WASI APIs are synchronous by nature, but Web APIs are traditionally asynch
 
 A [Rust port of coreutils with some patches](https://github.com/RReverser/coreutils) was chosen for the demo purposes, but it should be possible to extract and reuse same bindings for any applications compiled for the WebAssembly + WASI target.
 
-Note that some commands in the demo might not work due to either limitations of the WASI itself (such as absent concept of "current working directory" and, correspondingly, relative paths and such), limitations of the File System Access API (such as absent support for symlinks), or simply due to hardcoded assumptions about the target system in the used coreutils codebase itself. Most of those limitations can be easily worked around or will be naturally fixed as both APIs develop over time.
+Note that some commands in the demo might not work due to either limitations of the WASI itself (such as an [absent concept of "current working directory"](https://github.com/WebAssembly/WASI/issues/303) and, correspondingly, relative paths and such), limitations of the File System Access API (such as an [absent support for symlinks](https://github.com/WICG/file-system-access/issues/113)), or simply due to hardcoded assumptions about the target system in the used coreutils codebase itself. Most of those limitations can be easily worked around or will be naturally fixed as both APIs develop over time.
 
 ### Want to learn more?
 
