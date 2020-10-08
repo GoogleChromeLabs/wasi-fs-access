@@ -442,7 +442,7 @@ export default class Bindings {
                 let handle = await this._openFiles
                     .getPreOpen(dirFd)
                     .getFileOrDir(string.get(this._getBuffer(), pathPtr, pathLen), 3 /* Any */);
-                return this._getFileStat(handle.isFile ? await handle.getFile() : undefined, filestatPtr);
+                return this._getFileStat(handle.kind === 'file' ? await handle.getFile() : undefined, filestatPtr);
             },
             fd_seek: async (fd, offset, whence, filesizePtr) => {
                 let openFile = this._openFiles.get(fd).asFile();
