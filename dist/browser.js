@@ -106,8 +106,8 @@ catch {
                 case 'cd':
                 case 'pwd':
                     writeIndented(`
-            Unfortunately, WASI doesn't have a concept of current working directory.
-            Please pass absolute paths to all commands, e.g. "ls /some/path".
+            Unfortunately, WASI doesn't have a concept of current working directory yet: https://github.com/WebAssembly/WASI/issues/303
+            Meanwhile, please pass absolute paths to all commands, e.g. "ls /some/path".
           `);
                     continue;
                 case 'ln':
