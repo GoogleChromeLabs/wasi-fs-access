@@ -49,6 +49,13 @@ catch {
     term.loadAddon(fitAddon);
     let localEcho = new LocalEchoController();
     term.loadAddon(localEcho);
+    {
+        let storedHistory = localStorage.getItem('command-history');
+        if (storedHistory) {
+            localEcho.history.entries = storedHistory.split('\n');
+            localEcho.history.rewind();
+        }
+    }
     term.loadAddon(new WebLinksAddon.WebLinksAddon());
     term.open(document.body);
     fitAddon.fit();
@@ -103,6 +110,7 @@ catch {
     while (true) {
         let line = await localEcho.read('$ ');
         localEcho.history.rewind();
+        localStorage.setItem('command-history', localEcho.history.entries.join('\n'));
         let args = Array.from(line.matchAll(cmdParser), ([, s1, s2, s3]) => s1 ?? s2 ?? s3);
         try {
             if (!args.length) {

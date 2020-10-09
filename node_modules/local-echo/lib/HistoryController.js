@@ -20,7 +20,7 @@ export class HistoryController {
     // Keep track of entries
     this.entries.push(entry);
     if (this.entries.length > this.size) {
-      this.entries.pop(0);
+      this.entries.shift();
     }
     this.cursor = this.entries.length;
   }
