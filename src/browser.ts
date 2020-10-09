@@ -64,6 +64,13 @@ try {
 
   let localEcho = new LocalEchoController();
   term.loadAddon(localEcho);
+  {
+    let storedHistory = localStorage.getItem('command-history');
+    if (storedHistory) {
+      localEcho.history.entries = storedHistory.split('\n');
+      localEcho.history.rewind();
+    }
+  }
 
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
 
@@ -132,6 +139,7 @@ try {
   while (true) {
     let line: string = await localEcho.read('$ ');
     localEcho.history.rewind();
+    localStorage.setItem('command-history', localEcho.history.entries.join('\n'));
     let args = Array.from(
       line.matchAll(cmdParser),
       ([, s1, s2, s3]) => s1 ?? s2 ?? s3
