@@ -4,6 +4,8 @@
 
 This is a demo shell powered by [WebAssembly](https://webassembly.org/), [WASI](https://wasi.dev/), [Asyncify](https://emscripten.org/docs/porting/asyncify.html) and [File System Access API](https://wicg.github.io/file-system-access/).
 
+You can access the live version here: https://googlechromelabs.github.io/wasi-fs-access/
+
 ## How
 
 It provides WASI bindings implementation that proxies any filesystem requests to a real, host filesystem. This allows apps built in languages like C, C++, Rust and others to be compiled to WebAssembly and work as usual within a browser sandbox, accessing and manipulating files in a "real world".
@@ -19,7 +21,3 @@ Note that some commands in the demo might not work due to either limitations of 
 Check out my presentation from the [WebAssembly Live!](https://webassembly.live/) here: https://www.slideshare.net/RReverser/asyncifying-webassembly-for-the-modern-web
 
 _(Video recordings are coming soon)_
-
-## Demo
-
-Check out the demo here: https://googlechromelabs.github.io/wasi-fs-access/.
