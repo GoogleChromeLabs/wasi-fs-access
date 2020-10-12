@@ -247,13 +247,12 @@ class OpenFile {
   isFile!: true;
 
   public position = 0;
-  private _file: File | undefined = undefined;
   private _writer: FileSystemWritableFileStream | undefined = undefined;
 
   async getFile() {
     // TODO: do we really have to?
     await this.flush();
-    return this._file || (this._file = await this._handle.getFile());
+    return this._handle.getFile();
   }
 
   private async _getWriter() {
@@ -288,7 +287,6 @@ class OpenFile {
     if (!this._writer) return;
     await this._writer.close();
     this._writer = undefined;
-    this._file = undefined;
   }
 
   asFile() {
