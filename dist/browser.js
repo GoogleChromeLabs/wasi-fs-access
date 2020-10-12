@@ -29,9 +29,7 @@ try {
     globalThis.showDirectoryPicker ??= () => chooseFileSystemEntries({
         type: 'open-directory'
     });
-    // @ts-expect-error
     if (!('kind' in FileSystemHandle.prototype)) {
-        // @ts-expect-error
         Object.defineProperty(FileSystemHandle.prototype, 'kind', {
             get() {
                 return this.isFile ? 'file' : 'directory';
