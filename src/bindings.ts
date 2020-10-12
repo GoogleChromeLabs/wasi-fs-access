@@ -326,7 +326,7 @@ export default class Bindings {
     this._stdIn = stdin;
     this._stdOut = stdout;
     this._stdErr = stderr;
-    this._args = new StringCollection(['uutils', ...args]);
+    this._args = new StringCollection(args);
     this._env = new StringCollection(
       Object.entries(env).map(([key, value]) => `${key}=${value}`)
     );

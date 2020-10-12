@@ -267,7 +267,7 @@ try {
           },
           stdout: redirectedStdout ?? stdout,
           stderr: stdout,
-          args,
+          args: ['$', ...args],
           env: {
             RUST_BACKTRACE: '1'
           }
