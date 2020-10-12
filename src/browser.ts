@@ -41,9 +41,7 @@ try {
     chooseFileSystemEntries({
       type: 'open-directory'
     });
-  // @ts-expect-error
   if (!('kind' in FileSystemHandle.prototype)) {
-    // @ts-expect-error
     Object.defineProperty(FileSystemHandle.prototype, 'kind', {
       get(this: FileSystemHandle): FileSystemHandleKind {
         return this.isFile ? 'file' : 'directory';
