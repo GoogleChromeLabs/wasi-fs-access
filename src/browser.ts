@@ -216,8 +216,16 @@ try {
         redirectedStdout = await handle.createWritable();
       }
       localEcho.detach();
+      let abortController = new AbortController();
+      let ctrlCHandler = term.onData(s => {
+        if (s === '\x03') {
+          term.write('^C');
+          abortController.abort();
+        }
+      });
       try {
         let statusCode = await new Bindings({
+          abortSignal: abortController.signal,
           openFiles,
           stdin: {
             async read() {
@@ -226,10 +234,6 @@ try {
               try {
                 await new Promise((resolve, reject) => {
                   onData = term.onData(s => {
-                    // Ctrl+C
-                    if (s === '\x03') {
-                      return reject(new Error('^C'));
-                    }
                     // Ctrl+D
                     if (s === '\x04') {
                       term.writeln('^D');
@@ -272,6 +276,7 @@ try {
           term.writeln(`Exit code: ${statusCode}`);
         }
       } finally {
+        ctrlCHandler.dispose();
         localEcho.attach();
         if (redirectedStdout) {
           await redirectedStdout.close();
