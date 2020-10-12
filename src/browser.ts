@@ -142,6 +142,45 @@ try {
   const textEncoder = new TextEncoder();
   const textDecoder = new TextDecoder();
 
+  const stdin = {
+    async read() {
+      let onData: IDisposable;
+      let line = '';
+      try {
+        await new Promise(resolve => {
+          onData = term.onData(s => {
+            // Ctrl+D
+            if (s === '\x04') {
+              term.writeln('^D');
+              return resolve();
+            }
+            // Enter
+            if (s === '\r') {
+              term.writeln('');
+              line += '\n';
+              return resolve();
+            }
+            // Ignore other functional keys
+            if (s.charCodeAt(0) < 32) {
+              return;
+            }
+            // Backspace
+            if (s === '\x7F') {
+              term.write('\b \b');
+              line = line.slice(0, -1);
+              return;
+            }
+            term.write(s);
+            line += s;
+          });
+        });
+      } finally {
+        onData!.dispose();
+      }
+      return textEncoder.encode(line);
+    }
+  };
+
   const stdout = {
     write(data: Uint8Array) {
       term.write(
@@ -227,44 +266,7 @@ try {
         let statusCode = await new Bindings({
           abortSignal: abortController.signal,
           openFiles,
-          stdin: {
-            async read() {
-              let onData: IDisposable;
-              let line = '';
-              try {
-                await new Promise((resolve, reject) => {
-                  onData = term.onData(s => {
-                    // Ctrl+D
-                    if (s === '\x04') {
-                      term.writeln('^D');
-                      return resolve();
-                    }
-                    // Enter
-                    if (s === '\r') {
-                      term.writeln('');
-                      line += '\n';
-                      return resolve();
-                    }
-                    // Ignore other functional keys
-                    if (s.charCodeAt(0) < 32) {
-                      return;
-                    }
-                    // Backspace
-                    if (s === '\x7F') {
-                      term.write('\b \b');
-                      line = line.slice(0, -1);
-                      return;
-                    }
-                    term.write(s);
-                    line += s;
-                  });
-                });
-              } finally {
-                onData!.dispose();
-              }
-              return textEncoder.encode(line);
-            }
-          },
+          stdin,
           stdout: redirectedStdout ?? stdout,
           stderr: stdout,
           args: ['$', ...args],
