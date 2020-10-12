@@ -210,13 +210,12 @@ class OpenFile {
         this.path = path;
         this._handle = _handle;
         this.position = 0;
-        this._file = undefined;
         this._writer = undefined;
     }
     async getFile() {
         // TODO: do we really have to?
         await this.flush();
-        return this._file || (this._file = await this._handle.getFile());
+        return this._handle.getFile();
     }
     async _getWriter() {
         return (this._writer ||
@@ -245,7 +244,6 @@ class OpenFile {
             return;
         await this._writer.close();
         this._writer = undefined;
-        this._file = undefined;
     }
     asFile() {
         return this;

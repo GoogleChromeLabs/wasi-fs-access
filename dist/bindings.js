@@ -168,13 +168,28 @@ class StringCollection {
     }
 }
 export default class Bindings {
-    constructor({ openFiles, stdin = { read: () => new Uint8Array() }, stdout = lineOut(console.log), stderr = lineOut(console.error), args = [], env = {} }) {
+    constructor({ openFiles, stdin = { read: () => new Uint8Array() }, stdout = lineOut(console.log), stderr = lineOut(console.error), args = [], env = {}, abortSignal, }) {
         this._openFiles = openFiles;
         this._stdIn = stdin;
         this._stdOut = stdout;
         this._stdErr = stderr;
         this._args = new StringCollection(['uutils', ...args]);
         this._env = new StringCollection(Object.entries(env).map(([key, value]) => `${key}=${value}`));
+        this._abortSignal = abortSignal;
+    }
+    _checkAbort() {
+        if (this._abortSignal?.aborted) {
+            throw new SystemError(E.CANCELED);
+        }
+    }
+    _wait(ms) {
+        return new Promise((resolve, reject) => {
+            let id = setTimeout(resolve, ms);
+            this._abortSignal?.addEventListener('abort', () => {
+                clearTimeout(id);
+                reject(new SystemError(E.CANCELED));
+            });
+        });
     }
     _getBuffer() {
         let { memory } = this;
@@ -295,6 +310,7 @@ export default class Bindings {
                 let pos = Number(cookie);
                 let entries = openDir.getEntries(pos);
                 for await (let handle of entries) {
+                    this._checkAbort();
                     let { name } = handle;
                     let itemSize = dirent_t.size + name.length;
                     if (bufLen < itemSize) {
@@ -396,7 +412,7 @@ export default class Bindings {
                     let matchingCount = clockEvents.findIndex(item => item.timeout > wait);
                     matchingCount =
                         matchingCount === -1 ? clockEvents.length : matchingCount;
-                    await new Promise(resolve => setTimeout(resolve, clockEvents[matchingCount - 1].timeout));
+                    await this._wait(clockEvents[matchingCount - 1].timeout);
                     for (let i = 0; i < matchingCount; i++) {
                         addEvent({
                             userdata: clockEvents[i].userdata,
@@ -427,7 +443,7 @@ export default class Bindings {
             }
         };
         return new Proxy(bindings, {
-            get(target, name, receiver) {
+            get: (target, name, receiver) => {
                 let value = Reflect.get(target, name, receiver);
                 if (typeof name !== 'string' || typeof value !== 'function') {
                     return value;
@@ -435,6 +451,7 @@ export default class Bindings {
                 return async (...args) => {
                     try {
                         await value(...args);
+                        this._checkAbort();
                         return E.SUCCESS;
                     }
                     catch (err) {
@@ -466,6 +483,7 @@ export default class Bindings {
             let iovec = iovec_t.get(this._getBuffer(), iovsPtr);
             let buf = new Uint8Array(this._getBuffer(), iovec.bufPtr, iovec.bufLen);
             let handled = await cb(buf);
+            this._checkAbort();
             totalHandled += handled;
             if (handled < iovec.bufLen) {
                 break;
