@@ -57,15 +57,13 @@ const textEncoder = new TextEncoder();
 runBtn.onclick = async () => {
     runBtn.disabled = true;
     try {
-        let rootHandle = await chooseFileSystemEntries({
-            type: 'open-directory'
-        });
+        let rootHandle = await showDirectoryPicker();
         let [sandbox, tmp] = await Promise.all([
             rootHandle.getDirectoryHandle('sandbox'),
             rootHandle.getDirectoryHandle('tmp').then(async (tmp) => {
                 let promises = [];
-                for await (let entry of tmp.getEntries()) {
-                    promises.push(tmp.removeEntry(entry.name, { recursive: true }));
+                for await (let name of tmp.keys()) {
+                    promises.push(tmp.removeEntry(name, { recursive: true }));
                 }
                 await Promise.all(promises);
                 return tmp;
