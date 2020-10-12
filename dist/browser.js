@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-import Bindings from './bindings.js';
+import Bindings, { stringOut } from './bindings.js';
 import { OpenFiles } from './fileSystem.js';
 // Backports for new APIs to Chromium <=85.
 let hasSupport = true;
@@ -42,10 +42,24 @@ catch {
 }
 (async () => {
     const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
+    let knownCommands = ['help', 'mount'];
+    // This is just for the autocomplete, so spawn the task and ignore any errors.
+    (async () => {
+        let helpStr = '';
+        await new Bindings({
+            openFiles: new OpenFiles({}),
+            args: ['--help'],
+            stdout: stringOut(chunk => (helpStr += chunk))
+        }).run(await module);
+        knownCommands = knownCommands.concat(helpStr
+            .match(/Currently defined functions\/utilities:(.*)/s)[1]
+            .match(/[\w-]+/g));
+    })();
     let term = new Terminal();
     let fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     let localEcho = new LocalEchoController();
+    localEcho.addAutocompleteHandler((index) => index === 0 ? knownCommands : []);
     term.loadAddon(localEcho);
     {
         let storedHistory = localStorage.getItem('command-history');
