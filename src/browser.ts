@@ -243,16 +243,20 @@ try {
       }
       let openFiles = new OpenFiles(preOpen);
       let redirectedStdout;
-      if (args[args.length - 2] === '>') {
+      if (['>', '>>'].includes(args[args.length - 2])) {
         let path = args.pop()!;
         let { preOpen, relativePath } = openFiles.findRelPath(path);
-        args.pop(); // '>'
         let handle = await preOpen.getFileOrDir(
           relativePath,
           FileOrDir.File,
           OpenFlags.Create
         );
-        redirectedStdout = await handle.createWritable();
+        if (args.pop() === '>') {
+          redirectedStdout = await handle.createWritable();
+        } else {
+          redirectedStdout = await handle.createWritable({ keepExistingData: true });
+          redirectedStdout.seek((await handle.getFile()).size);
+        }
       }
       localEcho.detach();
       let abortController = new AbortController();
