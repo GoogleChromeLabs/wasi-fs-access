@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { IDisposable } from 'xterm';
-import Bindings, { OpenFlags } from './bindings.js';
+import Bindings, { OpenFlags, stringOut } from './bindings.js';
 import { FileOrDir, OpenFiles } from './fileSystem.js';
 
 declare const Terminal: typeof import('xterm').Terminal;
@@ -55,12 +55,33 @@ try {
 (async () => {
   const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
 
+  let knownCommands = ['help', 'mount'];
+  // This is just for the autocomplete, so spawn the task and ignore any errors.
+  (async () => {
+    let helpStr = '';
+
+    await new Bindings({
+      openFiles: new OpenFiles({}),
+      args: ['--help'],
+      stdout: stringOut(chunk => (helpStr += chunk))
+    }).run(await module);
+
+    knownCommands = knownCommands.concat(
+      helpStr
+        .match(/Currently defined functions\/utilities:(.*)/s)![1]
+        .match(/[\w-]+/g)!
+    );
+  })();
+
   let term = new Terminal();
 
   let fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
 
   let localEcho = new LocalEchoController();
+  localEcho.addAutocompleteHandler((index: number): string[] =>
+    index === 0 ? knownCommands : []
+  );
   term.loadAddon(localEcho);
   {
     let storedHistory = localStorage.getItem('command-history');
@@ -137,7 +158,10 @@ try {
   while (true) {
     let line: string = await localEcho.read('$ ');
     localEcho.history.rewind();
-    localStorage.setItem('command-history', localEcho.history.entries.join('\n'));
+    localStorage.setItem(
+      'command-history',
+      localEcho.history.entries.join('\n')
+    );
     let args = Array.from(
       line.matchAll(cmdParser),
       ([, s1, s2, s3]) => s1 ?? s2 ?? s3
