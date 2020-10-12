@@ -4,7 +4,7 @@
 
 This is a demo shell powered by [WebAssembly](https://webassembly.org/), [WASI](https://wasi.dev/), [Asyncify](https://emscripten.org/docs/porting/asyncify.html) and [File System Access API](https://wicg.github.io/file-system-access/).
 
-You can access the live version here: https://googlechromelabs.github.io/wasi-fs-access/
+You can access the live version here: https://wasi.rreverser.com/
 
 ## How
 
