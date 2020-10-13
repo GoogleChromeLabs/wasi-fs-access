@@ -4,6 +4,8 @@
 
 This is a demo shell powered by [WebAssembly](https://webassembly.org/), [WASI](https://wasi.dev/), [Asyncify](https://emscripten.org/docs/porting/asyncify.html) and [File System Access API](https://wicg.github.io/file-system-access/).
 
+[![Youtube recording](https://user-images.githubusercontent.com/557590/95856904-b16b2300-0d52-11eb-9726-5ce4f2df7915.png)](https://youtu.be/qRmO-8b4WmE)
+
 You can access the live version here: https://wasi.rreverser.com/
 
 ## How
