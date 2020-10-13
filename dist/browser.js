@@ -41,26 +41,12 @@ catch {
     hasSupport = false;
 }
 (async () => {
-    const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
-    let knownCommands = ['help', 'mount'];
-    // This is just for the autocomplete, so spawn the task and ignore any errors.
-    (async () => {
-        let helpStr = '';
-        await new Bindings({
-            openFiles: new OpenFiles({}),
-            args: ['--help'],
-            stdout: stringOut(chunk => (helpStr += chunk))
-        }).run(await module);
-        knownCommands = knownCommands.concat(helpStr
-            .match(/Currently defined functions\/utilities:(.*)/s)[1]
-            .match(/[\w-]+/g));
-    })();
     let term = new Terminal();
     let fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     let localEcho = new LocalEchoController();
+    let knownCommands = ['help', 'mount'];
     localEcho.addAutocompleteHandler((index) => index === 0 ? knownCommands : []);
-    term.loadAddon(localEcho);
     {
         let storedHistory = localStorage.getItem('command-history');
         if (storedHistory) {
@@ -68,6 +54,7 @@ catch {
             localEcho.history.rewind();
         }
     }
+    term.loadAddon(localEcho);
     term.loadAddon(new WebLinksAddon.WebLinksAddon());
     term.open(document.body);
     fitAddon.fit();
@@ -94,6 +81,19 @@ catch {
     `);
         return;
     }
+    const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
+    // This is just for the autocomplete, so spawn the task and ignore any errors.
+    (async () => {
+        let helpStr = '';
+        await new Bindings({
+            openFiles: new OpenFiles({}),
+            args: ['--help'],
+            stdout: stringOut(chunk => (helpStr += chunk))
+        }).run(await module);
+        knownCommands = knownCommands.concat(helpStr
+            .match(/Currently defined functions\/utilities:(.*)/s)[1]
+            .match(/[\w-]+/g));
+    })();
     writeIndented(`
     # Right now you have /sandbox mounted to a persistent sandbox filesystem:
     $ df -a
