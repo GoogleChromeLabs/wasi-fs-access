@@ -233,11 +233,11 @@ try {
         case 'cd': {
           let dest = args[1];
           if (dest) {
+            // Resolve against the current working dir.
+            dest = new URL(dest, `pwd:${pwd}/`).pathname;
             if (dest.endsWith('/')) {
               dest = dest.slice(0, -1);
             }
-            // Resolve against the current working dir.
-            dest = new URL(dest, `pwd:${pwd}/`).pathname;
             let openFiles = new OpenFiles(preOpens);
             let { preOpen, relativePath } = openFiles.findRelPath(dest);
             await preOpen.getFileOrDir(
