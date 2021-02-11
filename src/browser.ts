@@ -198,7 +198,7 @@ try {
   let pwd = '/sandbox';
 
   while (true) {
-    let line: string = await localEcho.read('$ ');
+    let line: string = await localEcho.read(`${pwd}$ `);
     localEcho.history.rewind();
     localStorage.setItem(
       'command-history',
