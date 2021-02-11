@@ -186,9 +186,9 @@ catch {
                     let dest = args[1];
                     if (dest) {
                         // Resolve against the current working dir.
-                        dest = new URL(dest, `pwd:${pwd}/`).pathname;
+                        dest = new URL(dest, `file://${pwd}/`).pathname;
                         if (dest.endsWith('/')) {
-                            dest = dest.slice(0, -1);
+                            dest = dest.slice(0, -1) || '/';
                         }
                         let openFiles = new OpenFiles(preOpens);
                         let { preOpen, relativePath } = openFiles.findRelPath(dest);
