@@ -45,7 +45,7 @@ catch {
     let fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     let localEcho = new LocalEchoController();
-    let knownCommands = ['help', 'mount'];
+    let knownCommands = ['help', 'mount', 'cd'];
     localEcho.addAutocompleteHandler((index) => index === 0 ? knownCommands : []);
     {
         let storedHistory = localStorage.getItem('command-history');
@@ -81,7 +81,7 @@ catch {
     `);
         return;
     }
-    const module = WebAssembly.compileStreaming(fetch('./uutils.async.wasm'));
+    const module = WebAssembly.compileStreaming(fetch('./coreutils.async.wasm'));
     // This is just for the autocomplete, so spawn the task and ignore any errors.
     (async () => {
         let helpStr = '';
@@ -156,8 +156,9 @@ catch {
         }
     };
     const cmdParser = /(?:'(.*?)'|"(.*?)"|(\S+))\s*/gsuy;
-    let preOpen = {};
-    preOpen['/sandbox'] = await navigator.storage.getDirectory();
+    let preOpens = {};
+    preOpens['/sandbox'] = await navigator.storage.getDirectory();
+    let pwd = '/sandbox';
     while (true) {
         let line = await localEcho.read('$ ');
         localEcho.history.rewind();
@@ -173,29 +174,35 @@ catch {
                     break;
                 case 'mount': {
                     let dest = args[1];
-                    if (!dest || dest === '--help') {
+                    if (!dest || dest === '--help' || !dest.startsWith('/')) {
                         term.writeln('Provide a desination mount point like "mount /mount/point" and choose a source in the dialogue.');
                         continue;
                     }
-                    let src = (preOpen[dest] = await showDirectoryPicker());
+                    let src = (preOpens[dest] = await showDirectoryPicker());
                     term.writeln(`Successfully mounted (...host path...)/${src.name} at ${dest}.`);
                     continue;
                 }
-                case 'cd':
-                case 'pwd':
-                    writeIndented(`
-            Unfortunately, WASI doesn't have a concept of current working directory yet: https://github.com/WebAssembly/WASI/issues/303
-            Meanwhile, please pass absolute paths to all commands, e.g. "ls /some/path".
-          `);
+                case 'cd': {
+                    let dest = args[1];
+                    if (dest) {
+                        if (dest.endsWith('/')) {
+                            dest = dest.slice(0, -1);
+                        }
+                        // Resolve against the current working dir.
+                        dest = new URL(dest, `pwd:${pwd}/`).pathname;
+                        let openFiles = new OpenFiles(preOpens);
+                        let { preOpen, relativePath } = openFiles.findRelPath(dest);
+                        await preOpen.getFileOrDir(relativePath, 2 /* Dir */, 2 /* Directory */);
+                        // We got here without failing, set the new working dir.
+                        pwd = dest;
+                    }
+                    else {
+                        term.writeln('Provide the directory argument.');
+                    }
                     continue;
-                case 'ln':
-                case 'link':
-                    writeIndented(`
-            Unfortunately, File System Access API doesn't support symlinks yet.
-          `);
-                    continue;
+                }
             }
-            let openFiles = new OpenFiles(preOpen);
+            let openFiles = new OpenFiles(preOpens);
             let redirectedStdout;
             if (['>', '>>'].includes(args[args.length - 2])) {
                 let path = args.pop();
@@ -226,7 +233,8 @@ catch {
                     stderr: stdout,
                     args: ['$', ...args],
                     env: {
-                        RUST_BACKTRACE: '1'
+                        RUST_BACKTRACE: '1',
+                        PWD: pwd
                     }
                 }).run(await module);
                 if (statusCode !== 0) {
