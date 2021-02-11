@@ -22,7 +22,7 @@ jobs:
           npm install
           npm run build -- --sourceRoot https://raw.githubusercontent.com/GoogleChromeLabs/wasi-fs-access/main/src/
           mkdir deploy
-          mv index.html uutils.async.wasm dist node_modules deploy
+          mv index.html coreutils.async.wasm dist node_modules deploy
           touch deploy/.nojekyll
 
       - name: Deploy 🚀

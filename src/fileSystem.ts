@@ -394,7 +394,7 @@ export class OpenFiles {
 
       // Match only complete path components.
       let last = path[i];
-      return last === '/' || last === '\0';
+      return last === '/' || !last;
     }
 
     // Search through the preopens table. Iterate in reverse so that more

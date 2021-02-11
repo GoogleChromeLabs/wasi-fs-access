@@ -41,8 +41,8 @@ const getDataView = (() => {
 })();
 
 function std<T = number>(name: string, size: number): TypeDesc<T> {
-  let get = DataView.prototype[`get${name}`];
-  let set = DataView.prototype[`set${name}`];
+  let get = (DataView.prototype as any)[`get${name}`];
+  let set = (DataView.prototype as any)[`set${name}`];
 
   return {
     size,
