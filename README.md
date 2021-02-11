@@ -22,4 +22,4 @@ Note that some commands in the demo might not work due to either limitations of 
 
 Check out my presentation from the [WebAssembly Live!](https://webassembly.live/) here: https://www.slideshare.net/RReverser/asyncifying-webassembly-for-the-modern-web
 
-_(Video recordings are coming soon)_
+And / or the talk: https://youtu.be/pzIJYAbcbf8?t=82
