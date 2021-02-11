@@ -271,7 +271,7 @@ export class OpenFiles {
             return this.get(fd);
         }
         else {
-            throw new SystemError(E.BADF);
+            throw new SystemError(E.BADF, true);
         }
     }
     _add(path, handle) {

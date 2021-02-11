@@ -113,9 +113,10 @@ const event_t = struct({
     fd_readwrite: event_fd_readwrite_t
 });
 export class SystemError extends Error {
-    constructor(code) {
+    constructor(code, ignore = false) {
         super(`E${E[code]}`);
         this.code = code;
+        this.ignore = ignore;
     }
 }
 export const bufferIn = (buffer) => {
@@ -495,7 +496,10 @@ export default class Bindings {
 }
 function translateError(err) {
     if (err instanceof SystemError) {
-        console.warn(err);
+        // Warn about any error except the one we always expect.
+        if (!err.ignore) {
+            console.warn(err);
+        }
         return err.code;
     }
     if (err instanceof DOMException) {
