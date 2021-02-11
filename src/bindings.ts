@@ -195,7 +195,7 @@ const event_t = struct({
 type event_t = TargetType<typeof event_t>;
 
 export class SystemError extends Error {
-  constructor(public readonly code: E) {
+  constructor(public readonly code: E, public readonly ignore = false) {
     super(`E${E[code]}`);
   }
 }
@@ -808,7 +808,10 @@ export default class Bindings {
 
 function translateError(err: any): E {
   if (err instanceof SystemError) {
-    console.warn(err);
+    // Warn about any error except the one we always expect.
+    if (!err.ignore) {
+      console.warn(err);
+    }
     return err.code;
   }
   if (err instanceof DOMException) {

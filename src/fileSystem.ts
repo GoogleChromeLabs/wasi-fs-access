@@ -328,7 +328,7 @@ export class OpenFiles {
     if (fd >= FIRST_PREOPEN_FD && fd < this._firstNonPreopenFd) {
       return this.get(fd) as OpenDirectory;
     } else {
-      throw new SystemError(E.BADF);
+      throw new SystemError(E.BADF, true);
     }
   }
 
