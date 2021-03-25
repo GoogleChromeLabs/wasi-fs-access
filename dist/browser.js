@@ -206,6 +206,8 @@ catch {
             let redirectedStdout;
             if (['>', '>>'].includes(args[args.length - 2])) {
                 let path = args.pop();
+                // Resolve against the current working dir.
+                path = new URL(path, `file://${pwd}/`).pathname;
                 let { preOpen, relativePath } = openFiles.findRelPath(path);
                 let handle = await preOpen.getFileOrDir(relativePath, 1 /* File */, 1 /* Create */);
                 if (args.pop() === '>') {
