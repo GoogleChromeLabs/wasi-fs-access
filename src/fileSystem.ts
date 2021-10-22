@@ -168,7 +168,7 @@ class OpenDirectory {
         try {
           return await parent.getFileHandle(name, { create });
         } catch (err) {
-          if (err.name === 'TypeMismatchError') {
+          if ((err as Error).name === 'TypeMismatchError') {
             if (!(mode & FileOrDir.Dir)) {
               console.warn(err);
               throw new SystemError(E.ISDIR);
@@ -181,7 +181,7 @@ class OpenDirectory {
       try {
         return await parent.getDirectoryHandle(name, { create });
       } catch (err) {
-        if (err.name === 'TypeMismatchError') {
+        if ((err as Error).name === 'TypeMismatchError') {
           console.warn(err);
           throw new SystemError(E.NOTDIR);
         } else {
