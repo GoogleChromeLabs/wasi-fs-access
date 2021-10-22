@@ -131,7 +131,7 @@ runBtn.onclick = async () => {
             if (err instanceof WebAssembly.RuntimeError) {
               message = `Wasm failed on \`unreachable\`:\n${actualStderr}`;
             } else {
-              message = err.message;
+              message = (err as Error).message;
             }
             resultCell.textContent = `NOT OK: ${message}`;
           }
