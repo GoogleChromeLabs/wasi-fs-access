@@ -304,7 +304,7 @@ try {
         }
       }
     } catch (err) {
-      term.writeln(err.message);
+      term.writeln((err as Error).message);
     }
   }
 })();
