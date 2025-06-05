@@ -13,8 +13,6 @@
 // limitations under the License.
 
 import { OpenFiles, FileOrDir, FIRST_PREOPEN_FD } from './fileSystem.js';
-// @ts-ignore
-import { instantiate } from '../node_modules/asyncify-wasm/dist/asyncify.mjs';
 import {
   enumer,
   ptr,
@@ -30,6 +28,16 @@ import {
   uint64_t,
   size_t
 } from './type-desc.js';
+
+declare global {
+  namespace WebAssembly {
+    class Suspending {
+      constructor(func: Function);
+    }
+
+    function promising(func: Function): (...args: any[]) => Promise<any>;
+  }
+}
 
 export enum E {
   SUCCESS = 0,
@@ -314,7 +322,7 @@ export default class Bindings {
     stderr = lineOut(console.error),
     args = [],
     env = {},
-    abortSignal,
+    abortSignal
   }: {
     openFiles: OpenFiles;
     stdin?: In;
@@ -659,9 +667,8 @@ export default class Bindings {
             this._getBuffer(),
             subscriptionPtr
           );
-          subscriptionPtr = (subscriptionPtr + subscription_t.size) as ptr<
-            subscription_t
-          >;
+          subscriptionPtr = (subscriptionPtr +
+            subscription_t.size) as ptr<subscription_t>;
           switch (union.tag) {
             case EventType.Clock: {
               let timeout = Number(union.data.timeout) / 1_000_000;
@@ -755,7 +762,7 @@ export default class Bindings {
         if (typeof name !== 'string' || typeof value !== 'function') {
           return value;
         }
-        return async (...args: any[]) => {
+        return new WebAssembly.Suspending(async (...args: any[]) => {
           try {
             await value(...args);
             this._checkAbort();
@@ -763,7 +770,7 @@ export default class Bindings {
           } catch (err) {
             return translateError(err);
           }
-        };
+        });
       }
     });
   }
@@ -771,12 +778,12 @@ export default class Bindings {
   async run(module: WebAssembly.Module): Promise<number> {
     let {
       exports: { _start, memory }
-    } = await instantiate(module, {
+    } = await WebAssembly.instantiate(module, {
       wasi_snapshot_preview1: this.getWasiImports()
     });
-    this.memory = memory;
+    this.memory = memory as WebAssembly.Memory;
     try {
-      await _start();
+      await WebAssembly.promising(_start as Function)();
       return 0;
     } catch (err) {
       if (err instanceof ExitStatus) {

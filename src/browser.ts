@@ -74,7 +74,7 @@ declare const WebLinksAddon: typeof import('@xterm/addon-web-links');
     return;
   }
 
-  const module = WebAssembly.compileStreaming(fetch('./coreutils.async.wasm'));
+  const module = WebAssembly.compileStreaming(fetch('./coreutils.wasm'));
 
   // This is just for the autocomplete, so spawn the task and ignore any errors.
   (async () => {
