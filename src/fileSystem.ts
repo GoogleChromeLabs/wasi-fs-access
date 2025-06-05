@@ -40,9 +40,7 @@ class OpenDirectory {
       }
     | undefined = undefined;
 
-  getEntries(
-    start = 0
-  ): AsyncIterableIterator<FileSystemHandle> & {
+  getEntries(start = 0): AsyncIterableIterator<FileSystemHandle> & {
     revert: (handle: FileSystemHandle) => void;
   } {
     if (this._currentIter?.pos !== start) {
@@ -145,7 +143,11 @@ class OpenDirectory {
     mode: FileOrDir,
     openFlags?: OpenFlags
   ): Promise<Handle>;
-  async getFileOrDir(path: string, mode: FileOrDir, openFlags = OpenFlags.None) {
+  async getFileOrDir(
+    path: string,
+    mode: FileOrDir,
+    openFlags = OpenFlags.None
+  ) {
     let { parent, name: maybeName } = await this._resolve(path);
     // Handle case when we couldn't get a parent, only direct handle
     // (this means it's a preopened directory).
@@ -216,7 +218,7 @@ class OpenDirectory {
       handle = await openWithCreate(false);
     }
     if (openFlags & OpenFlags.Truncate) {
-      if (handle.isDirectory) {
+      if (handle.kind === 'directory') {
         throw new SystemError(E.ISDIR);
       }
       let writable = await handle.createWritable({ keepExistingData: false });
@@ -256,12 +258,9 @@ class OpenFile {
   }
 
   private async _getWriter() {
-    return (
-      this._writer ||
-      (this._writer = await this._handle.createWritable({
-        keepExistingData: true
-      }))
-    );
+    return (this._writer ??= await this._handle.createWritable({
+      keepExistingData: true
+    }));
   }
 
   async setSize(size: number) {
@@ -440,7 +439,7 @@ export class OpenFiles {
     computed = computed.replace(/^\/+/, '');
 
     // *at syscalls don't accept empty relative paths, so use "." instead.
-    computed = computed || '.';
+    computed ||= '.';
 
     return {
       preOpen: foundPre,
