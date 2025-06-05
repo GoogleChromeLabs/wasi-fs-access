@@ -12,45 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { IDisposable } from 'xterm';
+import { IDisposable } from '@xterm/xterm';
 import Bindings, { OpenFlags, stringOut } from './bindings.js';
 import { FileOrDir, OpenFiles } from './fileSystem.js';
 
-declare const Terminal: typeof import('xterm').Terminal;
+declare const Terminal: typeof import('@xterm/xterm').Terminal;
 declare const LocalEchoController: any;
-declare const FitAddon: typeof import('xterm-addon-fit');
-declare const WebLinksAddon: typeof import('xterm-addon-web-links');
-
-// Backports for new APIs to Chromium <=85.
-let hasSupport = true;
-try {
-  navigator.storage.getDirectory ??= () =>
-    FileSystemDirectoryHandle.getSystemDirectory({
-      type: 'sandbox'
-    });
-  FileSystemDirectoryHandle.prototype.getDirectoryHandle ??=
-    FileSystemDirectoryHandle.prototype.getDirectory;
-  FileSystemDirectoryHandle.prototype.getFileHandle ??=
-    FileSystemDirectoryHandle.prototype.getFile;
-  FileSystemDirectoryHandle.prototype.values ??= function (
-    this: FileSystemDirectoryHandle
-  ) {
-    return this.getEntries()[Symbol.asyncIterator]();
-  };
-  globalThis.showDirectoryPicker ??= () =>
-    chooseFileSystemEntries({
-      type: 'open-directory'
-    });
-  if (!('kind' in FileSystemHandle.prototype)) {
-    Object.defineProperty(FileSystemHandle.prototype, 'kind', {
-      get(this: FileSystemHandle): FileSystemHandleKind {
-        return this.isFile ? 'file' : 'directory';
-      }
-    });
-  }
-} catch {
-  hasSupport = false;
-}
+declare const FitAddon: typeof import('@xterm/addon-fit');
+declare const WebLinksAddon: typeof import('@xterm/addon-web-links');
 
 (async () => {
   let term = new Terminal();
@@ -97,7 +66,7 @@ try {
     # Github repo with the source code and details: https://github.com/GoogleChromeLabs/wasi-fs-access
 
   `);
-  if (!hasSupport) {
+  if (!globalThis.showDirectoryPicker) {
     writeIndented(`
       Looks like your browser doesn't have support for the File System Access API yet.
       Please try a Chromium-based browser such as Google Chrome or Microsoft Edge.

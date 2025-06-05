@@ -145,7 +145,7 @@ class OpenDirectory {
     mode: FileOrDir,
     openFlags?: OpenFlags
   ): Promise<Handle>;
-  async getFileOrDir(path: string, mode: FileOrDir, openFlags: OpenFlags = 0) {
+  async getFileOrDir(path: string, mode: FileOrDir, openFlags = OpenFlags.None) {
     let { parent, name: maybeName } = await this._resolve(path);
     // Handle case when we couldn't get a parent, only direct handle
     // (this means it's a preopened directory).

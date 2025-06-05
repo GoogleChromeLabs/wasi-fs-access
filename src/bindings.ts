@@ -207,6 +207,7 @@ const enum Whence {
 }
 
 export const enum OpenFlags {
+  None = 0,
   Create = 1 << 0,
   Directory = 1 << 1,
   Exclusive = 1 << 2,
@@ -214,6 +215,7 @@ export const enum OpenFlags {
 }
 
 export const enum FdFlags {
+  None = 0,
   Append = 1 << 0,
   DSync = 1 << 1,
   NonBlock = 1 << 2,
@@ -431,7 +433,7 @@ export default class Bindings {
           );
           fsFlags &= ~FdFlags.NonBlock;
         }
-        if (fsFlags != 0) {
+        if (fsFlags != FdFlags.None) {
           unimplemented();
         }
         fd_t.set(
@@ -496,7 +498,7 @@ export default class Bindings {
         }
         fdstat_t.set(this._getBuffer(), fdstatPtr, {
           filetype,
-          flags: 0,
+          flags: FdFlags.None,
           rightsBase: /* anything */ -1n,
           rightsInheriting: /* anything but symlink */ ~(1n << 24n)
         });
