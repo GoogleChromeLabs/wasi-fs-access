@@ -346,9 +346,7 @@ export default class Bindings {
   memory: WebAssembly.Memory | undefined;
 
   private _checkAbort() {
-    if (this._abortSignal?.aborted) {
-      throw new SystemError(E.CANCELED);
-    }
+    this._abortSignal?.throwIfAborted();
   }
 
   private _wait(ms: number) {
