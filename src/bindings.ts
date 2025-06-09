@@ -515,15 +515,15 @@ export default class Bindings {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) =>
-        this._openFiles
+      ) => {
+        await this._openFiles
           .getPreOpen(dirFd)
           .getFileOrDir(
             string.get(this._getBuffer(), pathPtr, pathLen),
             FileOrDir.Dir,
             OpenFlags.Create | OpenFlags.Directory | OpenFlags.Exclusive
-          )
-          .then(() => {}),
+          );
+      },
       path_rename: async (
         oldDirFd: fd_t,
         oldPathPtr: ptr<string>,
@@ -756,10 +756,14 @@ export default class Bindings {
       }
     };
 
+    // AsyncFunction is not exposed in the global scope, so we need to get it manually.
+    const AsyncFunction = (async () => {}).constructor as typeof Function;
+
     return new Proxy(bindings, {
       get: (target, name, receiver) => {
         let value = Reflect.get(target, name, receiver);
-        if (typeof name !== 'string' || typeof value !== 'function') {
+        // We intentionally use explicit `async` syntax on async functions to make them easier to detect.
+        if (!(typeof name === 'string' && value instanceof AsyncFunction)) {
           return value;
         }
         return new WebAssembly.Suspending(async (...args: any[]) => {
