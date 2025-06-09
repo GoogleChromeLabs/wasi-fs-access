@@ -350,12 +350,16 @@ export default class Bindings {
   }
 
   private _wait(ms: number) {
-    return new Promise((resolve, reject) => {
-      let id = setTimeout(resolve, ms);
-      this._abortSignal?.addEventListener('abort', () => {
+    return new Promise<void>((resolve, reject) => {
+      function onAbort() {
         clearTimeout(id);
         reject(new SystemError(E.CANCELED));
-      });
+      }
+      let id = setTimeout(() => {
+        resolve();
+        this._abortSignal?.removeEventListener('abort', onAbort);
+      }, ms);
+      this._abortSignal?.addEventListener('abort', onAbort);
     });
   }
 
