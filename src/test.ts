@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import Bindings, { stringOut, bufferIn } from './bindings.js';
-import { OpenFiles } from './fileSystem.js';
+import Bindings, { stringOut, bufferIn, OpenFiles } from './bindings.js';
 
 const EOL = '\n';
 

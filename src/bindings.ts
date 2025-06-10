@@ -303,6 +303,8 @@ class StringCollection {
   }
 }
 
+export { OpenFiles };
+
 export default class Bindings {
   private _openFiles: OpenFiles;
 
@@ -781,15 +783,23 @@ export default class Bindings {
     });
   }
 
+  wrapExports(exports: WebAssembly.Exports) {
+    this.memory = exports.memory as WebAssembly.Memory;
+    return Object.fromEntries(
+      Object.entries(exports).map(([name, value]) => [
+        name,
+        typeof value === 'function' ? WebAssembly.promising(value) : value
+      ])
+    );
+  }
+
   async run(module: WebAssembly.Module): Promise<number> {
-    let {
-      exports: { _start, memory }
-    } = await WebAssembly.instantiate(module, {
+    let { exports } = await WebAssembly.instantiate(module, {
       wasi_snapshot_preview1: this.getWasiImports()
     });
-    this.memory = memory as WebAssembly.Memory;
+    exports = this.wrapExports(exports);
     try {
-      await WebAssembly.promising(_start as Function)();
+      await (exports._start as Function)();
       return 0;
     } catch (err) {
       if (err instanceof ExitStatus) {
