@@ -35,7 +35,7 @@ declare global {
       constructor(func: Function);
     }
 
-    function promising(func: Function): (...args: any[]) => Promise<any>;
+    function promising<A extends any[], R>(func: (...args: A) => R): (...args: A) => Promise<R>;
   }
 }
 
@@ -783,23 +783,17 @@ export default class Bindings {
     });
   }
 
-  wrapExports(exports: WebAssembly.Exports) {
+  setExports(exports: WebAssembly.Exports) {
     this.memory = exports.memory as WebAssembly.Memory;
-    return Object.fromEntries(
-      Object.entries(exports).map(([name, value]) => [
-        name,
-        typeof value === 'function' ? WebAssembly.promising(value) : value
-      ])
-    );
   }
 
   async run(module: WebAssembly.Module): Promise<number> {
     let { exports } = await WebAssembly.instantiate(module, {
       wasi_snapshot_preview1: this.getWasiImports()
     });
-    exports = this.wrapExports(exports);
+    this.setExports(exports);
     try {
-      await (exports._start as Function)();
+      await WebAssembly.promising(exports._start as () => void)();
       return 0;
     } catch (err) {
       if (err instanceof ExitStatus) {
