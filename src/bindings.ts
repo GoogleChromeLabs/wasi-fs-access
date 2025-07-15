@@ -295,30 +295,33 @@ function unimplemented() {
   throw new SystemError(E.NOSYS);
 }
 
+const textEncoder = new TextEncoder();
+
 class StringCollection {
-  private readonly _offsets: Uint32Array;
-  private readonly _buffer: string;
+  private readonly _encoded: Uint8Array[];
 
   constructor(strings: string[]) {
-    this._offsets = new Uint32Array(strings.length);
-    this._buffer = '';
-
-    for (let [i, s] of strings.entries()) {
-      this._offsets[i] = this._buffer.length;
-      this._buffer += `${s}\0`;
-    }
+    this._encoded = strings.map(str => textEncoder.encode(str + '\0'));
   }
 
   sizes_get(buf: ArrayBuffer, countPtr: ptr<number>, sizePtr: ptr<number>) {
-    size_t.set(buf, countPtr, this._offsets.length);
-    size_t.set(buf, sizePtr, this._buffer.length);
+    size_t.set(buf, countPtr, this._encoded.length);
+    size_t.set(
+      buf,
+      sizePtr,
+      this._encoded.reduce((acc, item) => acc + item.length, 0)
+    );
   }
 
   get(buf: ArrayBuffer, offsetsPtr: ptr<Uint32Array>, ptr: ptr<string>) {
-    new Uint32Array(buf, offsetsPtr, this._offsets.length).set(
-      this._offsets.map(offset => ptr + offset)
-    );
-    string.set(buf, ptr, this._buffer);
+    const offsets = new Uint32Array(buf, offsetsPtr, this._encoded.length);
+    const bytesView = new Uint8Array(buf);
+
+    for (const [i, encodedStr] of this._encoded.entries()) {
+      offsets[i] = ptr;
+      bytesView.set(encodedStr, ptr);
+      ptr = (ptr + encodedStr.length) as ptr<string>;
+    }
   }
 }
 
@@ -472,7 +475,7 @@ export default class Bindings implements AsyncDisposable {
       fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
         prestat_t.set(this._getBuffer(), prestatPtr, {
           type: PreOpenType.Dir,
-          nameLen: this._openFiles.getPreOpen(fd).wasiPath.length
+          nameLen: Buffer.byteLength(this._openFiles.getPreOpen(fd).wasiPath)
         });
       },
       fd_prestat_dir_name: (fd: fd_t, pathPtr: ptr<string>, pathLen: number) =>
@@ -592,17 +595,19 @@ export default class Bindings implements AsyncDisposable {
         const initialBufPtr = bufPtr;
         let openDir = this._openFiles.getDir(fd);
         let pos = Number(cookie);
+        let buf = this._getBuffer();
         for (let entry of await openDir.getEntries(pos)) {
           this._checkAbort();
           let { name } = entry;
-          let itemSize = dirent_t.size + name.length;
+          let nameLen = Buffer.byteLength(name);
+          let itemSize = dirent_t.size + nameLen;
           if (bufLen < itemSize) {
             break;
           }
           dirent_t.set(this._getBuffer(), bufPtr, {
             next: ++cookie,
             ino: 0n, // TODO
-            nameLen: name.length,
+            nameLen: nameLen,
             type: entry.isDirectory()
               ? FileType.Directory
               : FileType.RegularFile
