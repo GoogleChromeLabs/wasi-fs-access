@@ -154,7 +154,7 @@ export class OpenDirectory extends OpenFile {
 
   resolve(path: string) {
     path = joinPath(this._hostPath, path);
-    if (!path.startsWith(`${this._hostPath}/`)) {
+    if (path !== this._hostPath && !path.startsWith(`${this._hostPath}/`)) {
       // Prevent access outside the given directory descriptor.
       throw new SystemError(E.NOTCAPABLE);
     }
