@@ -82,14 +82,6 @@ export class OpenFile implements AsyncDisposable {
       nodeFlags |= fsc.O_WRONLY;
     }
 
-    for (const name in fsc) {
-      if (name.startsWith('O_') && nodeFlags & (fsc as any)[name]) {
-        console.log(
-          `Using Node.js flag: ${name} for open(${hostPath}, ${nodeFlags})`
-        );
-      }
-    }
-
     return new OpenFile(
       await open(hostPath, nodeFlags),
       // Note: do not use O_APPEND, as it opens us to kernel differences and shenanigans.

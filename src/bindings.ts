@@ -668,8 +668,7 @@ export default class Bindings implements AsyncDisposable {
             base = 0;
             break;
         }
-        console.log({ offset, whence, base });
-        openFile.position = base + Number(offset);
+                openFile.position = base + Number(offset);
         uint64_t.set(this._getBuffer(), filesizePtr, BigInt(openFile.position));
       },
       fd_tell: (fd: fd_t, offsetPtr: ptr<bigint>) => {
