@@ -776,7 +776,8 @@ export default class Bindings implements AsyncDisposable {
       fd_sync: async (fd: fd_t) => this._openFiles.getFile(fd).sync(),
       fd_filestat_set_size: async (fd: fd_t, newSize: bigint) =>
         this._openFiles.getFile(fd).setSize(Number(newSize)),
-      fd_renumber: (from: fd_t, to: fd_t) => this._openFiles.renumber(from, to),
+      fd_renumber: async (from: fd_t, to: fd_t) =>
+        this._openFiles.renumber(from, to),
       path_symlink: (oldPath: ptr<string>, fd: fd_t, newPath: ptr<string>) =>
         unimplemented(),
       clock_time_get: (
@@ -841,7 +842,11 @@ export default class Bindings implements AsyncDisposable {
         } else {
           return (...args: any[]) => {
             try {
-              value(...args);
+              const result = value(...args);
+              // Ensure we didn't miss any async functions.
+              if (result instanceof Promise) {
+                throw new Error(`Unexpected async function ${name.toString()}`);
+              }
               this._checkAbort();
               return E.SUCCESS;
             } catch (err) {
