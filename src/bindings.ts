@@ -28,6 +28,7 @@ import {
   uint64_t,
   size_t
 } from './type-desc.js';
+import { setTimeout, setImmediate } from 'node:timers/promises';
 
 declare global {
   namespace WebAssembly {
@@ -376,20 +377,6 @@ export default class Bindings implements AsyncDisposable {
     this._abortSignal?.throwIfAborted();
   }
 
-  private _wait(ms: number) {
-    return new Promise<void>((resolve, reject) => {
-      function onAbort() {
-        clearTimeout(id);
-        reject(new SystemError(E.CANCELED));
-      }
-      let id = setTimeout(() => {
-        resolve();
-        this._abortSignal?.removeEventListener('abort', onAbort);
-      }, ms);
-      this._abortSignal?.addEventListener('abort', onAbort);
-    });
-  }
-
   private _getBuffer() {
     let { memory } = this;
     if (!memory) {
@@ -476,9 +463,8 @@ export default class Bindings implements AsyncDisposable {
   getWasiImports() {
     // TODO: add rights checks.
     const bindings: Record<string, (...args: any[]) => void | Promise<void>> = {
-      sched_yield: async () => {
-        /* intentional async noop */
-      },
+      sched_yield: async () =>
+        setImmediate(undefined, { signal: this._abortSignal }),
       fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
         prestat_t.set(this._getBuffer(), prestatPtr, {
           type: PreOpenType.Dir,
@@ -690,7 +676,7 @@ export default class Bindings implements AsyncDisposable {
         pathLen: number
       ) => this._openFiles.rmFile(dirFd, this._getString(pathPtr, pathLen)),
       poll_oneoff: async (
-        subscriptionPtr: ptr<subscription_t>,
+        subscriptionsPtr: ptr<subscription_t[]>,
         eventsPtr: ptr<event_t>,
         subscriptionsNum: number,
         eventsNumPtr: ptr<number>
@@ -699,69 +685,71 @@ export default class Bindings implements AsyncDisposable {
           throw new RangeError('Polling requires at least one subscription');
         }
         let eventsNum = 0;
-        const addEvent = (event: Partial<event_t>) => {
-          Object.assign(event_t.get(this._getBuffer(), eventsPtr), event);
-          eventsNum++;
-          eventsPtr = (eventsPtr + event_t.size) as ptr<event_t>;
-        };
-        let clockEvents: {
-          timeout: number;
-          extra: number;
-          userdata: bigint;
-        }[] = [];
-        for (let i = 0; i < subscriptionsNum; i++) {
-          let { userdata, union } = subscription_t.get(
-            this._getBuffer(),
-            subscriptionPtr
-          );
-          subscriptionPtr = (subscriptionPtr +
-            subscription_t.size) as ptr<subscription_t>;
-          switch (union.tag) {
-            case EventType.Clock: {
-              let timeout = Number(union.data.timeout) / 1_000_000;
-              if (union.data.flags === SubclockFlags.Absolute) {
-                timeout -= getTime(union.data.id);
-              }
-              // This is not completely correct, since setTimeout doesn't give the required precision for monotonic clock.
-              clockEvents.push({
-                timeout,
-                extra: Number(union.data.precision) / 1_000_000,
-                userdata
-              });
-              break;
-            }
-            default: {
-              addEvent({
-                userdata,
-                error: E.NOSYS,
-                type: union.tag,
-                fd_readwrite: {
-                  nbytes: 0n,
-                  flags: EventRwFlags.None
+        // Create localized polling abort controller.
+        const abortController = new AbortController();
+        const { signal } = abortController;
+        // Propagate the outer abort signal to the polling.
+        this._abortSignal?.addEventListener(
+          'abort',
+          () => abortController.abort(),
+          // Make sure this event listener is removed whenever we're done with the polling
+          // (including if it aborted itself once already).
+          { signal }
+        );
+        const buf = this._getBuffer();
+        try {
+          await Promise.race(
+            Array.from(
+              { length: subscriptionsNum },
+              async (_, i): Promise<void> => {
+                let { userdata, union } = subscription_t.get(
+                  buf,
+                  (subscriptionsPtr +
+                    i * subscription_t.size) as ptr<subscription_t>
+                );
+                switch (union.tag) {
+                  case EventType.Clock: {
+                    let timeout = Number(union.data.timeout) / 1_000_000;
+                    if (union.data.flags === SubclockFlags.Absolute) {
+                      timeout -= getTime(union.data.id);
+                    }
+                    // This is not completely correct, since setTimeout doesn't give the required precision for monotonic clock.
+                    await setTimeout(timeout, { signal });
+                    break;
+                  }
+                  case EventType.FdRead:
+                  case EventType.FdWrite: {
+                    let { fd } = union.data;
+                    // Just verify that the file descriptor is valid.
+                    this._openFiles.getFile(fd);
+                    // Other than that, even WASI spec says it should resolve immediately for regular files.
+                    // I guess it's merely here for future-proofing.
+                    break;
+                  }
+                  default:
+                    unimplemented();
                 }
-              });
-              break;
-            }
-          }
-        }
-        if (!eventsNum) {
-          clockEvents.sort((a, b) => a.timeout - b.timeout);
-          let wait = clockEvents[0].timeout + clockEvents[0].extra;
-          let matchingCount = clockEvents.findIndex(
-            item => item.timeout > wait
+                // Note: doing this way is better than bare `Promise.race()` because it gives several events a chance
+                // to be resolved simultaneously.
+                Object.assign(event_t.get(buf, eventsPtr), {
+                  error: E.SUCCESS,
+                  type: union.tag,
+                  userdata,
+                  fd_readwrite: {
+                    nbytes: 1n,
+                    flags: EventRwFlags.None
+                  }
+                });
+                eventsNum++;
+                eventsPtr = (eventsPtr + event_t.size) as ptr<event_t>;
+              }
+            )
           );
-          matchingCount =
-            matchingCount === -1 ? clockEvents.length : matchingCount;
-          await this._wait(clockEvents[matchingCount - 1].timeout);
-          for (let i = 0; i < matchingCount; i++) {
-            addEvent({
-              userdata: clockEvents[i].userdata,
-              error: E.SUCCESS,
-              type: EventType.Clock
-            });
-          }
+        } finally {
+          // Clean up - remove the listener, stop timers.
+          abortController.abort();
         }
-        size_t.set(this._getBuffer(), eventsNumPtr, eventsNum);
+        size_t.set(buf, eventsNumPtr, eventsNum);
       },
       path_link: (
         oldDirFd: fd_t,
