@@ -201,14 +201,14 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   async open(
-    preopenFd: fd_t,
+    dirFd: fd_t,
     path: string,
     openFlags: OpenFlags,
     fdFlags: FdFlags,
     rights: Rights,
     rightsInheriting: Rights
   ) {
-    path = this.getPreOpen(preopenFd).resolve(path);
+    path = this.getDir(dirFd).resolve(path);
     if (openFlags & OpenFlags.Directory) {
       return this._add(await OpenDirectory.openDir(path));
     } else {
@@ -244,8 +244,8 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmFile(preopenFd: fd_t, path: string) {
-    path = this.getPreOpen(preopenFd).resolve(path);
+  rmFile(dirFd: fd_t, path: string) {
+    path = this.getDir(dirFd).resolve(path);
     return unlink(path);
   }
 
@@ -258,24 +258,19 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmDir(preopenFd: fd_t, path: string) {
-    path = this.getPreOpen(preopenFd).resolve(path);
+  rmDir(dirFd: fd_t, path: string) {
+    path = this.getDir(dirFd).resolve(path);
     return rmdir(path);
   }
 
-  async stat(preopenFd: fd_t, path: string) {
-    path = this.getPreOpen(preopenFd).resolve(path);
+  async stat(dirFd: fd_t, path: string) {
+    path = this.getDir(dirFd).resolve(path);
     return convertNodeStats(await stat(path, { bigint: true }));
   }
 
-  rename(
-    oldPreopenFd: fd_t,
-    oldPath: string,
-    newPreopenFd: fd_t,
-    newPath: string
-  ) {
-    oldPath = this.getPreOpen(oldPreopenFd).resolve(oldPath);
-    newPath = this.getPreOpen(newPreopenFd).resolve(newPath);
+  rename(oldDirFd: fd_t, oldPath: string, newDirFd: fd_t, newPath: string) {
+    oldPath = this.getDir(oldDirFd).resolve(oldPath);
+    newPath = this.getDir(newDirFd).resolve(newPath);
     return rename(oldPath, newPath);
   }
 
