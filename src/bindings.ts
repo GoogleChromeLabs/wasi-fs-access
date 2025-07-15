@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { OpenFiles, FileOrDir, FIRST_PREOPEN_FD } from './fileSystem.js';
+import { OpenFile, OpenFiles } from './fileSystem.js';
 import {
   enumer,
   ptr,
@@ -35,7 +35,9 @@ declare global {
       constructor(func: Function);
     }
 
-    function promising<A extends any[], R>(func: (...args: A) => R): (...args: A) => Promise<R>;
+    function promising<A extends any[], R>(
+      func: (...args: A) => R
+    ): (...args: A) => Promise<R>;
   }
 }
 
@@ -78,7 +80,7 @@ const iovec_t = struct({
 });
 type iovec_t = TargetType<typeof iovec_t>;
 
-const enum FileType {
+export const enum FileType {
   Unknown,
   BlockDevice,
   CharacterDevice,
@@ -132,7 +134,7 @@ const filestat_t = struct({
   modTime: timestamp_t,
   changeTime: timestamp_t
 });
-type filestat_t = TargetType<typeof filestat_t>;
+export type filestat_t = TargetType<typeof filestat_t>;
 
 const enum ClockId {
   Realtime,
@@ -203,8 +205,16 @@ const event_t = struct({
 type event_t = TargetType<typeof event_t>;
 
 export class SystemError extends Error {
-  constructor(public readonly code: E, public readonly ignore = false) {
+  constructor(public readonly code: E) {
     super(`E${E[code]}`);
+  }
+}
+
+// Special subclass of the BADF system error that indicates no more preopens.
+// We reuse it to easily ignore when logging, as otherwise we'd have to warn on each app.
+export class NoPreopen extends SystemError {
+  constructor() {
+    super(E.BADF);
   }
 }
 
@@ -218,7 +228,7 @@ export const enum OpenFlags {
   None = 0,
   Create = 1 << 0,
   Directory = 1 << 1,
-  Exclusive = 1 << 2,
+  Exclusive = Create | (1 << 2),
   Truncate = 1 << 3
 }
 
@@ -231,46 +241,55 @@ export const enum FdFlags {
   Sync = 1 << 4
 }
 
-interface In {
-  read(len: number): Uint8Array | Promise<Uint8Array>;
+export const enum Rights {
+  FdDatasync = 1 << 0,
+  FdRead = 1 << 1,
+  FdSeek = 1 << 2,
+  FdFdstatSetFlags = 1 << 3,
+  FdSync = 1 << 4,
+  FdTell = 1 << 5,
+  FdWrite = 1 << 6,
+  FdAdvise = 1 << 7,
+  FdAllocate = 1 << 8,
+  PathCreateDirectory = 1 << 9,
+  PathCreateFile = 1 << 10,
+  PathLinkSource = 1 << 11,
+  PathLinkTarget = 1 << 12,
+  PathOpen = 1 << 13,
+  FdReaddir = 1 << 14,
+  PathReadlink = 1 << 15,
+  PathRenameSource = 1 << 16,
+  PathRenameTarget = 1 << 17,
+  PathFilestatGet = 1 << 18,
+  PathFilestatSetSize = 1 << 19,
+  PathFilestatSetTimes = 1 << 20,
+  FdFilestatGet = 1 << 21,
+  FdFilestatSetSize = 1 << 22,
+  FdFilestatSetTimes = 1 << 23,
+  PathSymlink = 1 << 24,
+  PathRemoveDirectory = 1 << 25,
+  PathUnlinkFile = 1 << 26,
+  PollFdReadwrite = 1 << 27,
+  SockShutdown = 1 << 28,
+  SockAccept = 1 << 29,
+  // Custom collections
+
+  NeedsRead = Rights.FdRead | Rights.FdReaddir,
+  NeedsWrite = Rights.FdWrite |
+    Rights.FdDatasync |
+    Rights.FdSync |
+    Rights.FdAllocate |
+    Rights.FdFilestatSetSize,
+  All = -1 // All rights, used for rightsInheriting
 }
 
-interface Out {
-  write(data: Uint8Array): void | Promise<void>;
+export const enum SetTimeFlags {
+  None = 0,
+  AccessTime = 1 << 0,
+  AccessTimeNow = 1 << 1,
+  ModificationTime = 1 << 2,
+  ModificationTimeNow = 1 << 3
 }
-
-export const bufferIn = (buffer: Uint8Array): In => {
-  return {
-    read: len => {
-      let chunk = buffer.subarray(0, len);
-      buffer = buffer.subarray(len);
-      return chunk;
-    }
-  };
-};
-
-export const stringOut = (writeStr: (chunk: string) => void): Out => {
-  let decoder = new TextDecoder();
-
-  return {
-    write: data => {
-      writeStr(decoder.decode(data, { stream: true }));
-    }
-  };
-};
-
-export const lineOut = (writeLn: (chunk: string) => void): Out => {
-  let lineBuf = '';
-
-  return stringOut(chunk => {
-    lineBuf += chunk;
-    let lines = lineBuf.split('\n');
-    lineBuf = lines.pop()!;
-    for (let line of lines) {
-      writeLn(line);
-    }
-  });
-};
 
 function unimplemented() {
   throw new SystemError(E.NOSYS);
@@ -305,43 +324,46 @@ class StringCollection {
 
 export { OpenFiles };
 
-export default class Bindings {
-  private _openFiles: OpenFiles;
+function convertCpuTime(usage: NodeJS.CpuUsage) {
+  return (usage.user + usage.system) / 1000; // Convert to milliseconds
+}
 
-  private _args: StringCollection;
-  private _env: StringCollection;
+function getTime(id: ClockId) {
+  switch (id) {
+    case ClockId.Realtime:
+      return Date.now();
+    case ClockId.Monotonic:
+      return performance.now();
+    case ClockId.ProcessCPUTimeId:
+      return convertCpuTime(process.cpuUsage());
+    case ClockId.ThreadCPUTimeId:
+      return convertCpuTime(process.threadCpuUsage());
+  }
+}
 
-  private _stdIn: In;
-  private _stdOut: Out;
-  private _stdErr: Out;
+export default class Bindings implements AsyncDisposable {
+  private readonly _openFiles = new OpenFiles();
+
+  private readonly _args: StringCollection;
+
+  private readonly _env: StringCollection;
 
   private _abortSignal: AbortSignal | undefined;
 
   constructor({
-    openFiles,
-    stdin = { read: () => new Uint8Array() },
-    stdout = lineOut(console.log),
-    stderr = lineOut(console.error),
     args = [],
-    env = {},
+    env = [],
     abortSignal
   }: {
-    openFiles: OpenFiles;
-    stdin?: In;
-    stdout?: Out;
-    stderr?: Out;
     args?: string[];
-    env?: Record<string, string>;
+    env?: Record<string, string | undefined> | string[];
     abortSignal?: AbortSignal;
-  }) {
-    this._openFiles = openFiles;
-    this._stdIn = stdin;
-    this._stdOut = stdout;
-    this._stdErr = stderr;
+  } = {}) {
     this._args = new StringCollection(args);
-    this._env = new StringCollection(
-      Object.entries(env).map(([key, value]) => `${key}=${value}`)
-    );
+    if (!Array.isArray(env)) {
+      env = Object.entries(env).map(([key, value = '']) => `${key}=${value}`);
+    }
+    this._env = new StringCollection(env);
     this._abortSignal = abortSignal;
   }
 
@@ -373,45 +395,93 @@ export default class Bindings {
     return memory.buffer;
   }
 
-  private _getFileStat(file: File | undefined, filestatPtr: ptr<filestat_t>) {
-    let size = 0n;
-    let time = 0n;
-    if (file) {
-      size = BigInt(file.size);
-      time = BigInt(file.lastModified) * 1_000_000n;
-    }
-    filestat_t.set(this._getBuffer(), filestatPtr, {
-      dev: 0n,
-      ino: 0n, // TODO
-      filetype: file ? FileType.RegularFile : FileType.Directory,
-      nlink: 0n,
-      size,
-      accessTime: time,
-      modTime: time,
-      changeTime: time
+  private _getString(ptr: ptr<string>, len: number) {
+    return string.get(this._getBuffer(), ptr, len);
+  }
+
+  addPreOpen(hostPath: string, wasiPath: string) {
+    return this._openFiles.addPreOpen(hostPath, wasiPath);
+  }
+
+  async _fileIO(
+    fd: fd_t,
+    iovsPtr: ptr<iovec_t>,
+    iovsLen: number,
+    nprocessedBytesPtr: ptr<number>,
+    io: (file: OpenFile, bufs: Uint8Array[], offset: number) => Promise<number>,
+    offset?: bigint
+  ) {
+    const buffer = this._getBuffer();
+    const iovsRaw = new Uint32Array(buffer, iovsPtr, iovsLen * iovec_t.size);
+    let iovecs = Array.from({ length: iovsLen }, (_, i) => {
+      i *= 2;
+      return new Uint8Array(buffer, iovsRaw[i], iovsRaw[i + 1]);
     });
+    let file = this._openFiles.getFile(fd);
+    let nprocessedBytes = await io(
+      file,
+      iovecs,
+      offset !== undefined ? Number(offset) : file.position
+    );
+    size_t.set(this._getBuffer(), nprocessedBytesPtr, nprocessedBytes);
+    if (offset === undefined) {
+      file.position += nprocessedBytes;
+    }
+  }
+
+  private _fileRead(
+    fd: fd_t,
+    iovsPtr: ptr<iovec_t>,
+    iovsLen: number,
+    nreadPtr: ptr<number>,
+    offset?: bigint
+  ): void | PromiseLike<void> {
+    return this._fileIO(
+      fd,
+      iovsPtr,
+      iovsLen,
+      nreadPtr,
+      (f, bufs, offset) => f.readvAt(bufs, offset),
+      offset
+    );
+  }
+
+  private _fileWrite(
+    fd: fd_t,
+    iovsPtr: ptr<iovec_t>,
+    iovsLen: number,
+    nwrittenPtr: ptr<number>,
+    offset?: bigint
+  ): void | PromiseLike<void> {
+    return this._fileIO(
+      fd,
+      iovsPtr,
+      iovsLen,
+      nwrittenPtr,
+      (f, bufs, offset) => f.writevAt(bufs, offset),
+      offset
+    );
   }
 
   getWasiImports() {
+    // TODO: add rights checks.
     const bindings: Record<string, (...args: any[]) => void | Promise<void>> = {
+      sched_yield: async () => {
+        /* intentional async noop */
+      },
       fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
         prestat_t.set(this._getBuffer(), prestatPtr, {
           type: PreOpenType.Dir,
-          nameLen: this._openFiles.getPreOpen(fd).path.length
+          nameLen: this._openFiles.getPreOpen(fd).wasiPath.length
         });
       },
-      fd_prestat_dir_name: (
-        fd: fd_t,
-        pathPtr: ptr<string>,
-        pathLen: number
-      ) => {
+      fd_prestat_dir_name: (fd: fd_t, pathPtr: ptr<string>, pathLen: number) =>
         string.set(
           this._getBuffer(),
           pathPtr,
-          this._openFiles.getPreOpen(fd).path,
+          this._openFiles.getPreOpen(fd).wasiPath,
           pathLen
-        );
-      },
+        ),
       environ_sizes_get: (countPtr: ptr<number>, sizePtr: ptr<number>) =>
         this._env.sizes_get(this._getBuffer(), countPtr, sizePtr),
       environ_get: (environPtr: ptr<Uint32Array>, environBufPtr: ptr<string>) =>
@@ -436,80 +506,53 @@ export default class Bindings {
         oFlags: OpenFlags,
         fsRightsBase: bigint,
         fsRightsInheriting: bigint,
-        fsFlags: FdFlags,
+        fdFlags: FdFlags,
         fdPtr: ptr<fd_t>
-      ) => {
-        if (fsFlags & FdFlags.NonBlock) {
-          console.warn(
-            'Asked for non-blocking mode while opening the file, falling back to blocking one.'
-          );
-          fsFlags &= ~FdFlags.NonBlock;
-        }
-        if (fsFlags != FdFlags.None) {
-          unimplemented();
-        }
+      ) =>
         fd_t.set(
           this._getBuffer(),
           fdPtr,
           await this._openFiles.open(
-            this._openFiles.getPreOpen(dirFd),
-            string.get(this._getBuffer(), pathPtr, pathLen),
-            oFlags
+            dirFd,
+            this._getString(pathPtr, pathLen),
+            oFlags,
+            fdFlags,
+            Number(fsRightsBase),
+            Number(fsRightsInheriting)
           )
-        );
-      },
+        ),
       fd_fdstat_set_flags: (fd: fd_t, flags: FdFlags) => unimplemented(),
-      fd_close: (fd: fd_t) => this._openFiles.close(fd),
+      fd_close: async (fd: fd_t) => this._openFiles.close(fd),
+      fd_pread: async (
+        fd: fd_t,
+        iovsPtr: ptr<iovec_t>,
+        iovsLen: number,
+        offset: bigint,
+        nreadPtr: ptr<number>
+      ) => this._fileRead(fd, iovsPtr, iovsLen, nreadPtr, offset),
       fd_read: async (
         fd: fd_t,
         iovsPtr: ptr<iovec_t>,
         iovsLen: number,
         nreadPtr: ptr<number>
-      ) => {
-        let input = fd === 0 ? this._stdIn : this._openFiles.get(fd).asFile();
-        await this._forEachIoVec(iovsPtr, iovsLen, nreadPtr, async buf => {
-          let chunk = await input.read(buf.length);
-          buf.set(chunk);
-          return chunk.length;
-        });
-      },
+      ) => this._fileRead(fd, iovsPtr, iovsLen, nreadPtr),
+      fd_pwrite: async (
+        fd: fd_t,
+        iovsPtr: ptr<iovec_t>,
+        iovsLen: number,
+        offset: bigint,
+        nwrittenPtr: ptr<number>
+      ) => this._fileWrite(fd, iovsPtr, iovsLen, nwrittenPtr, offset),
       fd_write: async (
         fd: fd_t,
         iovsPtr: ptr<iovec_t>,
         iovsLen: number,
         nwrittenPtr: ptr<number>
-      ) => {
-        let out: Out;
-        switch (fd) {
-          case 1: {
-            out = this._stdOut;
-            break;
-          }
-          case 2: {
-            out = this._stdErr;
-            break;
-          }
-          default: {
-            out = this._openFiles.get(fd).asFile();
-            break;
-          }
-        }
-        await this._forEachIoVec(iovsPtr, iovsLen, nwrittenPtr, async data => {
-          await out.write(data);
-          return data.length;
-        });
-      },
+      ) => this._fileWrite(fd, iovsPtr, iovsLen, nwrittenPtr),
       fd_fdstat_get: async (fd: fd_t, fdstatPtr: ptr<fdstat_t>) => {
-        let filetype;
-        if (fd < FIRST_PREOPEN_FD) {
-          filetype = FileType.CharacterDevice;
-        } else if (this._openFiles.get(fd).isFile) {
-          filetype = FileType.RegularFile;
-        } else {
-          filetype = FileType.Directory;
-        }
+        let stats = await this._openFiles.get(fd).stat();
         fdstat_t.set(this._getBuffer(), fdstatPtr, {
-          filetype,
+          filetype: stats.filetype,
           flags: FdFlags.None,
           rightsBase: /* anything */ -1n,
           rightsInheriting: /* anything but symlink */ ~(1n << 24n)
@@ -519,15 +562,7 @@ export default class Bindings {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => {
-        await this._openFiles
-          .getPreOpen(dirFd)
-          .getFileOrDir(
-            string.get(this._getBuffer(), pathPtr, pathLen),
-            FileOrDir.Dir,
-            OpenFlags.Create | OpenFlags.Directory | OpenFlags.Exclusive
-          );
-      },
+      ) => this._openFiles.createDir(dirFd, this._getString(pathPtr, pathLen)),
       path_rename: async (
         oldDirFd: fd_t,
         oldPathPtr: ptr<string>,
@@ -535,15 +570,18 @@ export default class Bindings {
         newDirFd: fd_t,
         newPathPtr: ptr<string>,
         newPathLen: number
-      ) => unimplemented(),
-      path_remove_directory: (
+      ) =>
+        this._openFiles.rename(
+          oldDirFd,
+          this._getString(oldPathPtr, oldPathLen),
+          newDirFd,
+          this._getString(newPathPtr, newPathLen)
+        ),
+      path_remove_directory: async (
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) =>
-        this._openFiles
-          .getPreOpen(dirFd)
-          .delete(string.get(this._getBuffer(), pathPtr, pathLen)),
+      ) => this._openFiles.rmDir(dirFd, this._getString(pathPtr, pathLen)),
       fd_readdir: async (
         fd: fd_t,
         bufPtr: ptr<dirent_t>,
@@ -552,23 +590,22 @@ export default class Bindings {
         bufUsedPtr: ptr<number>
       ) => {
         const initialBufPtr = bufPtr;
-        let openDir = this._openFiles.get(fd).asDir();
+        let openDir = this._openFiles.getDir(fd);
         let pos = Number(cookie);
-        let entries = openDir.getEntries(pos);
-        for await (let handle of entries) {
+        for (let entry of await openDir.getEntries(pos)) {
           this._checkAbort();
-          let { name } = handle;
+          let { name } = entry;
           let itemSize = dirent_t.size + name.length;
           if (bufLen < itemSize) {
-            entries.revert(handle);
             break;
           }
           dirent_t.set(this._getBuffer(), bufPtr, {
             next: ++cookie,
             ino: 0n, // TODO
             nameLen: name.length,
-            type:
-              handle.kind === 'file' ? FileType.RegularFile : FileType.Directory
+            type: entry.isDirectory()
+              ? FileType.Directory
+              : FileType.RegularFile
           });
           string.set(
             this._getBuffer(),
@@ -594,32 +631,26 @@ export default class Bindings {
         pathPtr: ptr<string>,
         pathLen: number,
         filestatPtr: ptr<filestat_t>
-      ) => {
-        let handle = await this._openFiles
-          .getPreOpen(dirFd)
-          .getFileOrDir(
-            string.get(this._getBuffer(), pathPtr, pathLen),
-            FileOrDir.Any
-          );
-        return this._getFileStat(
-          handle.kind === 'file' ? await handle.getFile() : undefined,
-          filestatPtr
-        );
-      },
+      ) =>
+        filestat_t.set(
+          this._getBuffer(),
+          filestatPtr,
+          await this._openFiles.stat(dirFd, this._getString(pathPtr, pathLen))
+        ),
       fd_seek: async (
         fd: fd_t,
         offset: bigint,
         whence: Whence,
         filesizePtr: ptr<bigint>
       ) => {
-        let openFile = this._openFiles.get(fd).asFile();
+        let openFile = this._openFiles.getFile(fd);
         let base: number;
         switch (whence) {
           case Whence.Current:
             base = openFile.position;
             break;
           case Whence.End:
-            base = (await openFile.getFile()).size;
+            base = Number((await openFile.stat()).size);
             break;
           case Whence.Set:
             base = 0;
@@ -632,20 +663,20 @@ export default class Bindings {
         uint64_t.set(
           this._getBuffer(),
           offsetPtr,
-          BigInt(this._openFiles.get(fd).asFile().position)
+          BigInt(this._openFiles.getFile(fd).position)
         );
       },
-      fd_filestat_get: async (fd: fd_t, filestatPtr: ptr<filestat_t>) => {
-        let openFile = this._openFiles.get(fd);
-        this._getFileStat(
-          openFile.isFile ? await openFile.getFile() : undefined,
-          filestatPtr
-        );
-      },
-      path_unlink_file: (dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) =>
-        this._openFiles
-          .getPreOpen(dirFd)
-          .delete(string.get(this._getBuffer(), pathPtr, pathLen)),
+      fd_filestat_get: async (fd: fd_t, filestatPtr: ptr<filestat_t>) =>
+        filestat_t.set(
+          this._getBuffer(),
+          filestatPtr,
+          await this._openFiles.get(fd).stat()
+        ),
+      path_unlink_file: async (
+        dirFd: fd_t,
+        pathPtr: ptr<string>,
+        pathLen: number
+      ) => this._openFiles.rmFile(dirFd, this._getString(pathPtr, pathLen)),
       poll_oneoff: async (
         subscriptionPtr: ptr<subscription_t>,
         eventsPtr: ptr<event_t>,
@@ -677,9 +708,7 @@ export default class Bindings {
             case EventType.Clock: {
               let timeout = Number(union.data.timeout) / 1_000_000;
               if (union.data.flags === SubclockFlags.Absolute) {
-                let origin =
-                  union.data.id === ClockId.Realtime ? Date : performance;
-                timeout -= origin.now();
+                timeout -= getTime(union.data.id);
               }
               // This is not completely correct, since setTimeout doesn't give the required precision for monotonic clock.
               clockEvents.push({
@@ -731,15 +760,10 @@ export default class Bindings {
         newPathPtr: ptr<string>,
         newPathLen: number
       ) => unimplemented(),
-      fd_datasync: (fd: fd_t) => this._openFiles.get(fd).asFile().flush(),
-      fd_sync: async (fd: fd_t) => {
-        let openFile = this._openFiles.get(fd);
-        if (openFile.isFile) {
-          await openFile.flush();
-        }
-      },
+      fd_datasync: (fd: fd_t) => this._openFiles.getFile(fd).datasync(),
+      fd_sync: async (fd: fd_t) => this._openFiles.getFile(fd).sync(),
       fd_filestat_set_size: async (fd: fd_t, newSize: bigint) =>
-        this._openFiles.get(fd).asFile().setSize(Number(newSize)),
+        this._openFiles.getFile(fd).setSize(Number(newSize)),
       fd_renumber: (from: fd_t, to: fd_t) => this._openFiles.renumber(from, to),
       path_symlink: (oldPath: ptr<string>, fd: fd_t, newPath: ptr<string>) =>
         unimplemented(),
@@ -748,16 +772,33 @@ export default class Bindings {
         precision: bigint,
         resultPtr: ptr<bigint>
       ) => {
-        let origin = id === ClockId.Realtime ? Date : performance;
         timestamp_t.set(
           this._getBuffer(),
           resultPtr,
-          BigInt(Math.round(origin.now() * 1_000_000))
+          BigInt(Math.round(getTime(id) * 1_000_000))
         );
       },
       clock_res_get: (id: ClockId, resultPtr: ptr<bigint>) => {
         timestamp_t.set(this._getBuffer(), resultPtr, /* 1ms */ 1_000_000n);
-      }
+      },
+      fd_allocate: (fd: fd_t, offset: bigint, len: bigint) => unimplemented(),
+      fd_advise: (fd: fd_t, offset: bigint, len: bigint, advice: number) =>
+        unimplemented(),
+      fd_filestat_set_times: (
+        fd: fd_t,
+        atim: bigint,
+        mtim: bigint,
+        flags: SetTimeFlags
+      ) => unimplemented(),
+      path_filestat_set_times: (
+        dirFd: fd_t,
+        lookupFlags: number,
+        path: ptr<string>,
+        pathLen: number,
+        atim: bigint,
+        mtim: bigint,
+        flags: SetTimeFlags
+      ) => unimplemented()
     };
 
     // AsyncFunction is not exposed in the global scope, so we need to get it manually.
@@ -766,19 +807,31 @@ export default class Bindings {
     return new Proxy(bindings, {
       get: (target, name, receiver) => {
         let value = Reflect.get(target, name, receiver);
-        // We intentionally use explicit `async` syntax on async functions to make them easier to detect.
-        if (!(typeof name === 'string' && value instanceof AsyncFunction)) {
+        if (!(typeof name === 'string' && typeof value === 'function')) {
           return value;
         }
-        return new WebAssembly.Suspending(async (...args: any[]) => {
-          try {
-            await value(...args);
-            this._checkAbort();
-            return E.SUCCESS;
-          } catch (err) {
-            return translateError(err);
-          }
-        });
+        // We intentionally use explicit `async` syntax on async functions to make them easier to detect.
+        if (value instanceof AsyncFunction) {
+          return new WebAssembly.Suspending(async (...args: any[]) => {
+            try {
+              await value(...args);
+              this._checkAbort();
+              return E.SUCCESS;
+            } catch (err) {
+              return translateError(err);
+            }
+          });
+        } else {
+          return (...args: any[]) => {
+            try {
+              value(...args);
+              this._checkAbort();
+              return E.SUCCESS;
+            } catch (err) {
+              return translateError(err);
+            }
+          };
+        }
       }
     });
   }
@@ -799,42 +852,53 @@ export default class Bindings {
       if (err instanceof ExitStatus) {
         return err.statusCode;
       }
+      if (err instanceof WebAssembly.RuntimeError) {
+        // This is a runtime error, log and treat as SIGABRT.
+        console.error(err);
+        return 134;
+      }
+      // Anything else is an unexpected error, likely in the implementation.
       throw err;
     }
   }
 
-  private async _forEachIoVec(
-    iovsPtr: ptr<iovec_t>,
-    iovsLen: number,
-    handledPtr: ptr<number>,
-    cb: (buf: Uint8Array) => Promise<number>
-  ) {
-    let totalHandled = 0;
-    for (let i = 0; i < iovsLen; i++) {
-      let iovec = iovec_t.get(this._getBuffer(), iovsPtr);
-      let buf = new Uint8Array(this._getBuffer(), iovec.bufPtr, iovec.bufLen);
-      let handled = await cb(buf);
-      this._checkAbort();
-      totalHandled += handled;
-      if (handled < iovec.bufLen) {
-        break;
-      }
-      iovsPtr = (iovsPtr + iovec_t.size) as ptr<iovec_t>;
-    }
-    size_t.set(this._getBuffer(), handledPtr, totalHandled);
+  _getForTesting(fd: fd_t) {
+    return this._openFiles.get(fd);
+  }
+
+  [Symbol.asyncDispose]() {
+    return this._openFiles[Symbol.asyncDispose]();
   }
 }
 
 function translateError(err: any): E {
+  let code;
   if (err instanceof SystemError) {
-    // Warn about any error except the one we always expect.
-    if (!err.ignore) {
-      console.warn(err);
+    ({ code } = err);
+  } else if (typeof err.code === 'string') {
+    // https://nodejs.org/api/errors.html#errorcode
+    switch (err.code) {
+      case 'EACCES':
+      case 'EPERM':
+        code = E.ACCES;
+        break;
+      case 'EEXIST':
+        code = E.EXIST;
+        break;
+      case 'EISDIR':
+        code = E.ISDIR;
+        break;
+      case 'ENOENT':
+        code = E.NOENT;
+        break;
+      case 'ENOTDIR':
+        code = E.NOTDIR;
+        break;
+      case 'ENOTEMPTY':
+        code = E.NOTEMPTY;
+        break;
     }
-    return err.code;
-  }
-  if (err instanceof DOMException) {
-    let code;
+  } else if (err instanceof DOMException) {
     switch (err.name) {
       case 'NotFoundError':
         code = E.NOENT;
@@ -851,13 +915,18 @@ function translateError(err: any): E {
         code = E.CANCELED;
         break;
     }
-    if (code) {
-      console.warn(err);
-      return code;
-    }
   } else if (err instanceof TypeError || err instanceof RangeError) {
-    console.warn(err);
-    return E.INVAL;
+    code = E.INVAL;
   }
-  throw err;
+  if (code) {
+    // Before returning the code, log the original error details.
+    // Ignore the preopen error we expect in all apps.
+    if (!(err instanceof NoPreopen)) {
+      console.warn(err);
+    }
+    return code;
+  } else {
+    // Not something we can map to a WASI error code, must be a critical error.
+    throw err;
+  }
 }

@@ -2,9 +2,11 @@
   "name": "wasi-fs-access",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "tsc -p .",
-    "watch": "tsc -p . -w"
+    "watch": "tsc -p . -w",
+    "test": "py -3 tests/wasi-testsuite/test-runner/wasi_test_runner.py -t tests/wasi-testsuite/tests/c/testsuite tests/wasi-testsuite/tests/rust/testsuite tests/wasi-testsuite/tests/assemblyscript/testsuite --exclude-filter tests/skip.json -r tests/test-adapter.py"
   },
   "repository": {
     "type": "git",
@@ -18,14 +20,9 @@
   },
   "homepage": "https://github.com/GoogleChromeLabs/wasi-fs-access#readme",
   "description": "",
-  "dependencies": {
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/xterm": "^5.5.0",
-    "local-echo": "github:RReverser/local-echo"
-  },
   "devDependencies": {
-    "@types/wicg-file-system-access": "2023.10.6",
+    "@types/node": "24.0.14",
+    "tsx": "^4.20.3",
     "typescript": "5.8.3"
   }
 }

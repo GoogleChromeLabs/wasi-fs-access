@@ -12,348 +12,270 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { fd_t, OpenFlags, SystemError, E } from './bindings.js';
+import type { BigIntStats, Dirent } from 'node:fs';
+import * as fs from 'node:fs';
+import { mkdir, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises';
+import {
+  fd_t,
+  OpenFlags,
+  SystemError,
+  E,
+  FdFlags,
+  FileType,
+  Rights,
+  filestat_t,
+  NoPreopen
+} from './bindings.js';
+import { join as joinPath } from 'node:path/posix';
+import { promisify } from 'node:util';
 
-export type Handle = FileSystemFileHandle | FileSystemDirectoryHandle;
+// Note: not using fs/promises because it doesn't allow constructing file handles from raw fd, and we need some file ops for stdin/stdout/stderr.
+const open = promisify(fs.open);
+const readv = promisify(fs.readv);
+const writev = promisify(fs.writev);
+const fstat = promisify(fs.fstat);
+const fdatasync = promisify(fs.fdatasync);
+const fsync = promisify(fs.fsync);
+const fruncate = promisify(fs.ftruncate);
+const utimes = promisify(fs.futimes);
+const close = promisify(fs.close);
 
-class OpenDirectory {
-  constructor(
-    public readonly path: string,
-    private readonly _handle: FileSystemDirectoryHandle
-  ) {}
+const fsc = fs.constants;
 
-  isFile!: false;
+export class OpenFile implements AsyncDisposable {
+  constructor(private readonly hostFd: number) {}
 
-  asFile(): never {
-    throw new SystemError(E.ISDIR);
-  }
-
-  asDir() {
-    return this;
-  }
-
-  private _currentIter:
-    | {
-        pos: number;
-        reverted: FileSystemHandle | undefined;
-        iter: AsyncIterableIterator<FileSystemHandle>;
-      }
-    | undefined = undefined;
-
-  getEntries(start = 0): AsyncIterableIterator<FileSystemHandle> & {
-    revert: (handle: FileSystemHandle) => void;
-  } {
-    if (this._currentIter?.pos !== start) {
-      // We're at incorrect position and will have to skip [start] items.
-      this._currentIter = {
-        pos: 0,
-        reverted: undefined,
-        iter: this._handle.values()
-      };
-    } else {
-      // We are already at correct position, so zero this out.
-      start = 0;
-    }
-    let currentIter = this._currentIter;
-    return {
-      next: async () => {
-        // This is a rare case when the caller tries to start reading directory
-        // from a different position than our iterator is on.
-        //
-        // This can happen e.g. with multiple iterators, or if previous iteration
-        // has been cancelled.
-        //
-        // In those cases, we need to first manually skip [start] items from the
-        // iterator, and on the next calls we'll be able to continue normally.
-        for (; start; start--) {
-          await currentIter.iter.next();
-        }
-        // If there is a handle saved by a `revert(...)` call, take and return it.
-        let { reverted } = currentIter;
-        if (reverted) {
-          currentIter.reverted = undefined;
-          currentIter.pos++;
-          return {
-            value: reverted,
-            done: false
-          };
-        }
-        // Otherwise use the underlying iterator.
-        let res = await currentIter.iter.next();
-        if (!res.done) {
-          currentIter.pos++;
-        }
-        return res;
-      },
-      // This function allows to go one step back in the iterator
-      // by saving an item in an internal buffer.
-      // That item will be given back on the next iteration attempt.
-      //
-      // This allows to avoid having to restart the underlying
-      // forward iterator over and over again just to find the required
-      // position.
-      revert: (handle: FileSystemHandle) => {
-        if (currentIter.reverted || currentIter.pos === 0) {
-          throw new Error('Cannot revert a handle in the current state.');
-        }
-        currentIter.pos--;
-        currentIter.reverted = handle;
-      },
-      [Symbol.asyncIterator]() {
-        return this;
-      }
-    };
-  }
-
-  private async _resolve(path: string) {
-    let parts = path ? path.split('/') : [];
-    let resolvedParts = [];
-    for (let item of parts) {
-      if (item === '..') {
-        if (resolvedParts.pop() === undefined) {
-          throw new SystemError(E.NOTCAPABLE);
-        }
-      } else if (item !== '.') {
-        resolvedParts.push(item);
-      }
-    }
-    let name = resolvedParts.pop();
-    let parent = this._handle;
-    for (let item of resolvedParts) {
-      parent = await parent.getDirectoryHandle(item);
-    }
-    return {
-      parent,
-      name
-    };
-  }
-
-  getFileOrDir(
-    path: string,
-    mode: FileOrDir.File,
-    openFlags?: OpenFlags
-  ): Promise<FileSystemFileHandle>;
-  getFileOrDir(
-    path: string,
-    mode: FileOrDir.Dir,
-    openFlags?: OpenFlags
-  ): Promise<FileSystemDirectoryHandle>;
-  getFileOrDir(
-    path: string,
-    mode: FileOrDir,
-    openFlags?: OpenFlags
-  ): Promise<Handle>;
-  async getFileOrDir(
-    path: string,
-    mode: FileOrDir,
-    openFlags = OpenFlags.None
+  static async openFile(
+    hostPath: string,
+    openFlags: OpenFlags,
+    fdFlags: FdFlags,
+    rights: Rights
   ) {
-    let { parent, name: maybeName } = await this._resolve(path);
-    // Handle case when we couldn't get a parent, only direct handle
-    // (this means it's a preopened directory).
-    if (maybeName === undefined) {
-      if (mode & FileOrDir.Dir) {
-        if (openFlags & (OpenFlags.Create | OpenFlags.Exclusive)) {
-          throw new SystemError(E.EXIST);
-        }
-        if (openFlags & OpenFlags.Truncate) {
-          throw new SystemError(E.ISDIR);
-        }
-        return parent;
-      } else {
-        throw new SystemError(E.ISDIR);
-      }
-    }
-    let name = maybeName;
-    async function openWithCreate(create: boolean) {
-      if (mode & FileOrDir.File) {
-        try {
-          return await parent.getFileHandle(name, { create });
-        } catch (err) {
-          if ((err as Error).name === 'TypeMismatchError') {
-            if (!(mode & FileOrDir.Dir)) {
-              console.warn(err);
-              throw new SystemError(E.ISDIR);
-            }
-          } else {
-            throw err;
-          }
-        }
-      }
-      try {
-        return await parent.getDirectoryHandle(name, { create });
-      } catch (err) {
-        if ((err as Error).name === 'TypeMismatchError') {
-          console.warn(err);
-          throw new SystemError(E.NOTDIR);
-        } else {
-          throw err;
-        }
-      }
-    }
-    if (openFlags & OpenFlags.Directory) {
-      if (mode & FileOrDir.Dir) {
-        mode = FileOrDir.Dir;
-      } else {
-        throw new TypeError(
-          `Open flags ${openFlags} require a directory but mode ${mode} doesn't allow it.`
-        );
-      }
-    }
-    let handle: Handle;
+    let nodeFlags = 0;
+
     if (openFlags & OpenFlags.Create) {
-      if (openFlags & OpenFlags.Exclusive) {
-        let exists = true;
-        try {
-          await openWithCreate(false);
-        } catch {
-          exists = false;
-        }
-        if (exists) {
-          throw new SystemError(E.EXIST);
-        }
-      }
-      handle = await openWithCreate(true);
-    } else {
-      handle = await openWithCreate(false);
+      nodeFlags |= fsc.O_CREAT;
+    }
+    if (openFlags & OpenFlags.Exclusive) {
+      nodeFlags |= fsc.O_EXCL;
     }
     if (openFlags & OpenFlags.Truncate) {
-      if (handle.kind === 'directory') {
-        throw new SystemError(E.ISDIR);
-      }
-      let writable = await handle.createWritable({ keepExistingData: false });
-      await writable.close();
+      nodeFlags |= fsc.O_TRUNC;
     }
-    return handle;
-  }
 
-  async delete(path: string) {
-    let { parent, name } = await this._resolve(path);
-    if (!name) {
-      throw new SystemError(E.ACCES);
+    if (fdFlags & FdFlags.Append) {
+      nodeFlags |= fsc.O_APPEND;
     }
-    await parent.removeEntry(name);
-  }
-
-  close() {}
-}
-
-OpenDirectory.prototype.isFile = false;
-
-class OpenFile {
-  constructor(
-    public readonly path: string,
-    private readonly _handle: FileSystemFileHandle
-  ) {}
-
-  isFile!: true;
-
-  public position = 0;
-  private _writer: FileSystemWritableFileStream | undefined = undefined;
-
-  async getFile() {
-    // TODO: do we really have to?
-    await this.flush();
-    return this._handle.getFile();
-  }
-
-  private async _getWriter() {
-    return (this._writer ??= await this._handle.createWritable({
-      keepExistingData: true
-    }));
-  }
-
-  async setSize(size: number) {
-    let writer = await this._getWriter();
-    await writer.truncate(size);
-  }
-
-  async read(len: number) {
-    let file = await this.getFile();
-    let slice = file.slice(this.position, this.position + len);
-    let arrayBuffer = await slice.arrayBuffer();
-    this.position += arrayBuffer.byteLength;
-    return new Uint8Array(arrayBuffer);
-  }
-
-  async write(data: Uint8Array) {
-    let writer = await this._getWriter();
-    await writer.write({ type: 'write', position: this.position, data });
-    this.position += data.length;
-  }
-
-  async flush() {
-    if (!this._writer) return;
-    await this._writer.close();
-    this._writer = undefined;
-  }
-
-  asFile() {
-    return this;
-  }
-
-  asDir(): never {
-    throw new SystemError(E.NOTDIR);
-  }
-
-  close() {
-    return this.flush();
-  }
-}
-
-OpenFile.prototype.isFile = true;
-
-export const enum FileOrDir {
-  File = 1, // 1 << 0
-  Dir = 2, // 1 << 1
-  Any = 3 // File | Dir
-}
-
-export const FIRST_PREOPEN_FD = 3 as fd_t;
-
-export class OpenFiles {
-  private _files = new Map<fd_t, OpenFile | OpenDirectory>();
-  private _nextFd = FIRST_PREOPEN_FD;
-  private readonly _firstNonPreopenFd: fd_t;
-
-  constructor(preOpen: Record<string, FileSystemDirectoryHandle>) {
-    for (let path in preOpen) {
-      this._add(path, preOpen[path]);
+    if (fdFlags & FdFlags.DSync) {
+      nodeFlags |= fsc.O_DSYNC;
     }
-    this._firstNonPreopenFd = this._nextFd;
-  }
-
-  getPreOpen(fd: fd_t): OpenDirectory {
-    if (fd >= FIRST_PREOPEN_FD && fd < this._firstNonPreopenFd) {
-      return this.get(fd) as OpenDirectory;
-    } else {
-      throw new SystemError(E.BADF, true);
+    if (fdFlags & FdFlags.NonBlock) {
+      nodeFlags |= fsc.O_NONBLOCK;
     }
+    if (fdFlags & (FdFlags.Sync | FdFlags.RSync)) {
+      nodeFlags |= fsc.O_SYNC;
+    }
+
+    if (rights & Rights.NeedsRead) {
+      nodeFlags |= rights & Rights.NeedsWrite ? fsc.O_RDWR : fsc.O_RDONLY;
+    } else if (rights & Rights.NeedsWrite) {
+      nodeFlags |= fsc.O_WRONLY;
+    }
+
+    return new OpenFile(await open(hostPath, nodeFlags));
   }
 
-  private _add(path: string, handle: Handle) {
-    this._files.set(
-      this._nextFd,
-      handle.kind === 'file'
-        ? new OpenFile(path, handle)
-        : new OpenDirectory(path, handle)
+  position = 0;
+
+  async readvAt(bufs: Uint8Array[], position: number): Promise<number> {
+    const { bytesRead } = await readv(this.hostFd, bufs, position);
+    return bytesRead;
+  }
+
+  async writevAt(bufs: Uint8Array[], position: number): Promise<number> {
+    const { bytesWritten } = await writev(this.hostFd, bufs, position);
+    return bytesWritten;
+  }
+
+  async stat() {
+    return convertNodeStats(await fstat(this.hostFd, { bigint: true }));
+  }
+
+  datasync() {
+    return fdatasync(this.hostFd);
+  }
+
+  sync() {
+    return fsync(this.hostFd);
+  }
+
+  setSize(size: number) {
+    return fruncate(this.hostFd, size);
+  }
+
+  setTimes(accessTimeNs: bigint, modTimeNs: bigint) {
+    // Node.js doesn't support setting change time, so we ignore it.
+    return utimes(
+      this.hostFd,
+      Number(accessTimeNs) / 1e6,
+      Number(modTimeNs) / 1e6
     );
+  }
+
+  async [Symbol.asyncDispose]() {
+    // Don't close real stdin/stdout/stderr, as they might be still needed by the parent process.
+    if (this.hostFd >= 3) {
+      await close(this.hostFd);
+    }
+  }
+}
+
+export class OpenDirectory extends OpenFile {
+  constructor(private readonly _hostPath: string, hostFd: number) {
+    super(hostFd);
+    // TODO: add handling for inheriting rights.
+  }
+
+  static async openDir(hostPath: string) {
+    return new OpenDirectory(hostPath, await open(hostPath, fsc.O_DIRECTORY));
+  }
+
+  private _entries?: Dirent[];
+
+  async getEntries(start = 0) {
+    this._entries ??= await readdir(this._hostPath, { withFileTypes: true });
+    return this._entries.slice(start);
+  }
+
+  resolve(path: string) {
+    path = joinPath(this._hostPath, path);
+    if (!path.startsWith(`${this._hostPath}/`)) {
+      // Prevent access outside the given directory descriptor.
+      throw new SystemError(E.NOTCAPABLE);
+    }
+    return path;
+  }
+
+  async [Symbol.asyncDispose]() {
+    await super[Symbol.asyncDispose]();
+  }
+}
+
+export class PreopenDirectory extends OpenDirectory {
+  constructor(
+    public readonly wasiPath: string,
+    ...args: ConstructorParameters<typeof OpenDirectory>
+  ) {
+    super(...args);
+  }
+}
+
+export class OpenFiles implements AsyncDisposable {
+  private _files = new Map<fd_t, OpenFile | OpenDirectory>();
+  private _nextFd = 0 as fd_t;
+
+  constructor() {
+    this._add(new OpenFile(process.stdin.fd));
+    this._add(new OpenFile(process.stdout.fd));
+    this._add(new OpenFile(process.stderr.fd));
+  }
+
+  private _add(handle: OpenFile | OpenDirectory) {
+    this._files.set(this._nextFd, handle);
     return this._nextFd++ as fd_t;
   }
 
-  async open(preOpen: OpenDirectory, path: string, openFlags?: OpenFlags) {
-    return this._add(
-      `${preOpen.path}/${path}`,
-      await preOpen.getFileOrDir(path, FileOrDir.Any, openFlags)
+  public async addPreOpen(wasiPath: string, hostPath: string) {
+    this._add(
+      new PreopenDirectory(
+        wasiPath,
+        hostPath,
+        await open(hostPath, fsc.O_DIRECTORY)
+      )
     );
   }
 
+  createDir(dir: fd_t, path: string) {
+    return mkdir(this.getDir(dir).resolve(path));
+  }
+
+  async open(
+    preopenFd: fd_t,
+    path: string,
+    openFlags: OpenFlags,
+    fdFlags: FdFlags,
+    rights: Rights,
+    rightsInheriting: Rights
+  ) {
+    path = this.getPreOpen(preopenFd).resolve(path);
+    if (openFlags & OpenFlags.Directory) {
+      return this._add(await OpenDirectory.openDir(path));
+    } else {
+      return this._add(
+        await OpenFile.openFile(path, openFlags, fdFlags, rights)
+      );
+    }
+  }
+
   get(fd: fd_t) {
-    let openFile = this._files.get(fd);
-    if (!openFile) {
+    const file = this._files.get(fd);
+    if (!file) {
       throw new SystemError(E.BADF);
     }
-    return openFile;
+    return file;
+  }
+
+  getPreOpen(fd: fd_t): PreopenDirectory {
+    let file = this._files.get(fd);
+    if (file instanceof PreopenDirectory) {
+      return file;
+    } else {
+      throw new NoPreopen();
+    }
+  }
+
+  getFile(fd: fd_t): OpenFile {
+    let openFile = this.get(fd);
+    if (openFile instanceof OpenFile) {
+      return openFile;
+    } else {
+      throw new SystemError(E.ISDIR);
+    }
+  }
+
+  rmFile(preopenFd: fd_t, path: string) {
+    path = this.getPreOpen(preopenFd).resolve(path);
+    return unlink(path);
+  }
+
+  getDir(fd: fd_t): OpenDirectory {
+    let openFile = this.get(fd);
+    if (openFile instanceof OpenDirectory) {
+      return openFile;
+    } else {
+      throw new SystemError(E.NOTDIR);
+    }
+  }
+
+  rmDir(preopenFd: fd_t, path: string) {
+    path = this.getPreOpen(preopenFd).resolve(path);
+    return rmdir(path);
+  }
+
+  async stat(preopenFd: fd_t, path: string) {
+    path = this.getPreOpen(preopenFd).resolve(path);
+    return convertNodeStats(await stat(path, { bigint: true }));
+  }
+
+  rename(
+    oldPreopenFd: fd_t,
+    oldPath: string,
+    newPreopenFd: fd_t,
+    newPath: string
+  ) {
+    oldPath = this.getPreOpen(oldPreopenFd).resolve(oldPath);
+    newPath = this.getPreOpen(newPreopenFd).resolve(newPath);
+    return rename(oldPath, newPath);
   }
 
   private _take(fd: fd_t) {
@@ -367,83 +289,52 @@ export class OpenFiles {
     this._files.set(to, this._take(from));
   }
 
-  async close(fd: fd_t) {
-    await this._take(fd).close();
+  close(fd: fd_t) {
+    return (this._take(fd) as Partial<AsyncDisposable>)[
+      Symbol.asyncDispose
+    ]?.();
   }
 
-  // Translation of the algorithm from __wasilibc_find_relpath.
-  findRelPath(path: string) {
-    /// Are the `prefix_len` bytes pointed to by `prefix` a prefix of `path`?
-    function prefixMatches(prefix: string, path: string) {
-      // Allow an empty string as a prefix of any relative path.
-      if (path[0] != '/' && !prefix) {
-        return true;
-      }
+  async [Symbol.asyncDispose]() {
+    await Promise.all(
+      Array.from(this._files.values(), file => file[Symbol.asyncDispose]())
+    );
+  }
+}
 
-      // Check whether any bytes of the prefix differ.
-      if (!path.startsWith(prefix)) {
-        return false;
-      }
+function convertNodeStats(stats: BigIntStats): filestat_t {
+  return {
+    dev: stats.dev,
+    ino: stats.ino,
+    filetype: getFileType(stats),
+    nlink: stats.nlink,
+    size: stats.size,
+    accessTime: stats.atimeNs,
+    modTime: stats.mtimeNs,
+    changeTime: stats.ctimeNs
+  };
+}
 
-      // Ignore trailing slashes in directory names.
-      let i = prefix.length;
-      while (i > 0 && prefix[i - 1] == '/') {
-        --i;
-      }
+export function getFileType(stats: BigIntStats): FileType {
+  const kind = Number(stats.mode) & fsc.S_IFMT;
 
-      // Match only complete path components.
-      let last = path[i];
-      return last === '/' || !last;
-    }
-
-    // Search through the preopens table. Iterate in reverse so that more
-    // recently added preopens take precedence over less recently addded ones.
-    let matchLen = 0;
-    let foundPre;
-    for (let i = this._firstNonPreopenFd - 1; i >= FIRST_PREOPEN_FD; --i) {
-      let pre = this.get(i as fd_t) as OpenDirectory;
-      let prefix = pre.path;
-
-      if (path !== '.' && !path.startsWith('./')) {
-        // We're matching a relative path that doesn't start with "./" and
-        // isn't ".".
-        if (prefix.startsWith('./')) {
-          prefix = prefix.slice(2);
-        } else if (prefix === '.') {
-          prefix = prefix.slice(1);
-        }
-      }
-
-      // If we haven't had a match yet, or the candidate path is longer than
-      // our current best match's path, and the candidate path is a prefix of
-      // the requested path, take that as the new best path.
-      if (
-        (!foundPre || prefix.length > matchLen) &&
-        prefixMatches(prefix, path)
-      ) {
-        foundPre = pre;
-        matchLen = prefix.length;
-      }
-    }
-
-    if (!foundPre) {
-      throw new Error(
-        `Couldn't resolve the given path via preopened directories.`
-      );
-    }
-
-    // The relative path is the substring after the portion that was matched.
-    let computed = path.slice(matchLen);
-
-    // Omit leading slashes in the relative path.
-    computed = computed.replace(/^\/+/, '');
-
-    // *at syscalls don't accept empty relative paths, so use "." instead.
-    computed ||= '.';
-
-    return {
-      preOpen: foundPre,
-      relativePath: computed
-    };
+  switch (kind) {
+    case fsc.S_IFREG:
+      return FileType.RegularFile;
+    case fsc.S_IFDIR:
+      return FileType.Directory;
+    case fsc.S_IFCHR:
+      return FileType.CharacterDevice;
+    case fsc.S_IFLNK:
+      return FileType.SymbolicLink;
+    case fsc.S_IFBLK:
+      return FileType.BlockDevice;
+    case fsc.S_IFIFO:
+      return FileType.SocketDatagram; // FIFO is treated as a socket datagram.
+    case fsc.S_IFSOCK:
+      return FileType.SocketStream; // Socket is treated as a stream.
+    default:
+      console.warn(`Unsupported file type: 0x${kind.toString(16)}`);
+      return FileType.Unknown;
   }
 }
