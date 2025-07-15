@@ -810,6 +810,11 @@ export default class Bindings implements AsyncDisposable {
         atim: bigint,
         mtim: bigint,
         flags: SetTimeFlags
+      ) => unimplemented(),
+      fd_fdstat_set_rights: (
+        fd: fd_t,
+        rightsBase: bigint,
+        rightsInheriting: bigint
       ) => unimplemented()
     };
 
