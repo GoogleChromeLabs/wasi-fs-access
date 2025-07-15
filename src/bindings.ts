@@ -642,20 +642,24 @@ export default class Bindings implements AsyncDisposable {
         filesizePtr: ptr<bigint>
       ) => {
         let openFile = this._openFiles.getFile(fd);
-        let base: number;
+        let pos: number;
         switch (whence) {
           case Whence.Current:
-            base = openFile.position;
+            pos = openFile.position;
             break;
           case Whence.End:
-            base = Number((await openFile.stat()).size);
+            pos = Number((await openFile.stat()).size);
             break;
           case Whence.Set:
-            base = 0;
+            pos = 0;
             break;
         }
-        openFile.position = base + Number(offset);
-        uint64_t.set(this._getBuffer(), filesizePtr, BigInt(openFile.position));
+        pos += Number(offset);
+        if (pos < 0) {
+          throw new SystemError(E.INVAL);
+        }
+        openFile.position = pos;
+        uint64_t.set(this._getBuffer(), filesizePtr, BigInt(pos));
       },
       fd_tell: (fd: fd_t, offsetPtr: ptr<bigint>) => {
         uint64_t.set(
