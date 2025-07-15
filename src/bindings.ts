@@ -362,7 +362,7 @@ export default class Bindings implements AsyncDisposable {
     env?: Record<string, string | undefined> | string[];
     abortSignal?: AbortSignal;
   } = {}) {
-    this._args = new StringCollection(args);
+    this._args = new StringCollection(['wasi-app', ...args]);
     if (!Array.isArray(env)) {
       env = Object.entries(env).map(([key, value = '']) => `${key}=${value}`);
     }
@@ -668,7 +668,7 @@ export default class Bindings implements AsyncDisposable {
             base = 0;
             break;
         }
-                openFile.position = base + Number(offset);
+        openFile.position = base + Number(offset);
         uint64_t.set(this._getBuffer(), filesizePtr, BigInt(openFile.position));
       },
       fd_tell: (fd: fd_t, offsetPtr: ptr<bigint>) => {
