@@ -43,7 +43,10 @@ const close = promisify(fs.close);
 const fsc = fs.constants;
 
 export class OpenFile implements AsyncDisposable {
-  constructor(private readonly hostFd: number) {}
+  constructor(
+    private readonly hostFd: number,
+    public readonly isAppend: boolean
+  ) {}
 
   static async openFile(
     hostPath: string,
@@ -63,9 +66,6 @@ export class OpenFile implements AsyncDisposable {
       nodeFlags |= fsc.O_TRUNC;
     }
 
-    if (fdFlags & FdFlags.Append) {
-      nodeFlags |= fsc.O_APPEND;
-    }
     if (fdFlags & FdFlags.DSync) {
       nodeFlags |= fsc.O_DSYNC;
     }
@@ -82,7 +82,20 @@ export class OpenFile implements AsyncDisposable {
       nodeFlags |= fsc.O_WRONLY;
     }
 
-    return new OpenFile(await open(hostPath, nodeFlags));
+    for (const name in fsc) {
+      if (name.startsWith('O_') && nodeFlags & (fsc as any)[name]) {
+        console.log(
+          `Using Node.js flag: ${name} for open(${hostPath}, ${nodeFlags})`
+        );
+      }
+    }
+
+    return new OpenFile(
+      await open(hostPath, nodeFlags),
+      // Note: do not use O_APPEND, as it opens us to kernel differences and shenanigans.
+      // We already need to do our own position tracking anyway (since Node.js doesn't expose it), so we can handle appending ourselves.
+      !!(fdFlags & FdFlags.Append)
+    );
   }
 
   position = 0;
@@ -132,7 +145,7 @@ export class OpenFile implements AsyncDisposable {
 
 export class OpenDirectory extends OpenFile {
   constructor(private readonly _hostPath: string, hostFd: number) {
-    super(hostFd);
+    super(hostFd, false);
     // TODO: add handling for inheriting rights.
   }
 
@@ -154,10 +167,6 @@ export class OpenDirectory extends OpenFile {
       throw new SystemError(E.NOTCAPABLE);
     }
     return path;
-  }
-
-  async [Symbol.asyncDispose]() {
-    await super[Symbol.asyncDispose]();
   }
 }
 

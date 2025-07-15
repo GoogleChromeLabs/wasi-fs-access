@@ -219,9 +219,9 @@ export class NoPreopen extends SystemError {
 }
 
 const enum Whence {
+  Set,
   Current,
-  End,
-  Set
+  End
 }
 
 export const enum OpenFlags {
@@ -461,7 +461,14 @@ export default class Bindings implements AsyncDisposable {
       iovsPtr,
       iovsLen,
       nwrittenPtr,
-      (f, bufs, offset) => f.writevAt(bufs, offset),
+      async (f, bufs, calculatedOffset) => {
+        // In O_APPEND mode with an implicit offset, we need to seek to the end of the file.
+        const isAppending = offset === undefined && f.isAppend;
+        if (isAppending) {
+          calculatedOffset = f.position = Number((await f.stat()).size);
+        }
+        return f.writevAt(bufs, calculatedOffset);
+      },
       offset
     );
   }
@@ -661,6 +668,7 @@ export default class Bindings implements AsyncDisposable {
             base = 0;
             break;
         }
+        console.log({ offset, whence, base });
         openFile.position = base + Number(offset);
         uint64_t.set(this._getBuffer(), filesizePtr, BigInt(openFile.position));
       },
