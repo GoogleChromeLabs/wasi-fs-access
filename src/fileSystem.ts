@@ -176,9 +176,9 @@ export class OpenFiles implements AsyncDisposable {
   private _nextFd = 0 as fd_t;
 
   constructor() {
-    this._add(new OpenFile(process.stdin.fd));
-    this._add(new OpenFile(process.stdout.fd));
-    this._add(new OpenFile(process.stderr.fd));
+    this._add(new OpenFile(process.stdin.fd, false));
+    this._add(new OpenFile(process.stdout.fd, false));
+    this._add(new OpenFile(process.stderr.fd, false));
   }
 
   private _add(handle: OpenFile | OpenDirectory) {
