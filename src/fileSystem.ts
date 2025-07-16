@@ -47,7 +47,7 @@ const fsc = fs.constants;
 export class OpenFile implements AsyncDisposable {
   constructor(
     private readonly hostFd: number,
-    public readonly isAppend: boolean
+    public readonly fdFlags: FdFlags
   ) {}
 
   static async openFile(
@@ -84,12 +84,10 @@ export class OpenFile implements AsyncDisposable {
       nodeFlags |= fsc.O_WRONLY;
     }
 
-    return new OpenFile(
-      await open(hostPath, nodeFlags),
-      // Note: do not use O_APPEND, as it opens us to kernel differences and shenanigans.
-      // We already need to do our own position tracking anyway (since Node.js doesn't expose it), so we can handle appending ourselves.
-      !!(fdFlags & FdFlags.Append)
-    );
+    // Note: do not use O_APPEND, as it opens us to kernel differences and shenanigans.
+    // We already need to do our own position tracking anyway (since Node.js doesn't expose it), so we can handle appending ourselves.
+
+    return new OpenFile(await open(hostPath, nodeFlags), fdFlags);
   }
 
   private _position: number = 0;
@@ -152,7 +150,7 @@ type DirentInfo = Omit<dirent_t, 'next' | 'nameLen'> & { name: string };
 
 export class OpenDirectory extends OpenFile {
   constructor(private readonly _hostPath: string, hostFd: number) {
-    super(hostFd, false);
+    super(hostFd, FdFlags.None);
     // TODO: add handling for inheriting rights.
   }
 
@@ -217,9 +215,9 @@ export class OpenFiles implements AsyncDisposable {
   private _nextFd = 0 as fd_t;
 
   constructor() {
-    this._add(new OpenFile(process.stdin.fd, false));
-    this._add(new OpenFile(process.stdout.fd, false));
-    this._add(new OpenFile(process.stderr.fd, false));
+    this._add(new OpenFile(process.stdin.fd, FdFlags.None));
+    this._add(new OpenFile(process.stdout.fd, FdFlags.None));
+    this._add(new OpenFile(process.stderr.fd, FdFlags.None));
   }
 
   private _add(handle: OpenFile | OpenDirectory) {

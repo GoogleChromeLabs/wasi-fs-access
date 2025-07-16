@@ -459,8 +459,7 @@ export default class Bindings implements AsyncDisposable {
       nwrittenPtr,
       async (f, bufs, calculatedOffset) => {
         // In O_APPEND mode with an implicit offset, we need to seek to the end of the file.
-        const isAppending = offset === undefined && f.isAppend;
-        if (isAppending) {
+        if (offset === undefined && f.fdFlags & FdFlags.Append) {
           calculatedOffset = f.position = Number((await f.stat()).size);
         }
         return f.writevAt(bufs, calculatedOffset);
