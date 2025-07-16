@@ -91,7 +91,18 @@ export class OpenFile implements AsyncDisposable {
     );
   }
 
-  position = 0;
+  private _position: number = 0;
+
+  get position() {
+    return this._position;
+  }
+
+  set position(value: number) {
+    if (value < 0) {
+      throw new RangeError('Position cannot be negative');
+    }
+    this._position = value;
+  }
 
   async readvAt(bufs: Uint8Array[], position: number): Promise<number> {
     const { bytesRead } = await readv(this.hostFd, bufs, position);
@@ -144,6 +155,10 @@ export class OpenDirectory extends OpenFile {
 
   static async openDir(hostPath: string) {
     return new OpenDirectory(hostPath, await open(hostPath, fsc.O_DIRECTORY));
+  }
+
+  set position(_value: number) {
+    throw new SystemError(E.NOTCAPABLE);
   }
 
   private _entries?: Pick<Dirent, 'name' | 'isFile' | 'isDirectory'>[];

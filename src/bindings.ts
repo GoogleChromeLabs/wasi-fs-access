@@ -557,7 +557,8 @@ export default class Bindings implements AsyncDisposable {
         fdstat_t.set(this._getBuffer(), fdstatPtr, {
           filetype: stats.filetype,
           flags: FdFlags.None,
-          rightsBase: Rights.All,
+          rightsBase:
+            stats.filetype === FileType.Directory ? ~Rights.FdSeek : Rights.All,
           rightsInheriting: ~Rights.PathSymlink
         });
       },
