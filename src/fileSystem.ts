@@ -196,19 +196,17 @@ export class OpenFiles implements AsyncDisposable {
     );
   }
 
-  createDir(dir: fd_t, path: string) {
-    return mkdir(this.getDir(dir).resolve(path));
+  createDir(path: string) {
+    return mkdir(path);
   }
 
   async open(
-    dirFd: fd_t,
     path: string,
     openFlags: OpenFlags,
     fdFlags: FdFlags,
     rights: Rights,
     rightsInheriting: Rights
   ) {
-    path = this.getDir(dirFd).resolve(path);
     if (openFlags & OpenFlags.Directory) {
       return this._add(await OpenDirectory.openDir(path));
     } else {
@@ -244,8 +242,7 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmFile(dirFd: fd_t, path: string) {
-    path = this.getDir(dirFd).resolve(path);
+  rmFile(path: string) {
     return unlink(path);
   }
 
@@ -258,19 +255,15 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmDir(dirFd: fd_t, path: string) {
-    path = this.getDir(dirFd).resolve(path);
+  rmDir(path: string) {
     return rmdir(path);
   }
 
-  async stat(dirFd: fd_t, path: string) {
-    path = this.getDir(dirFd).resolve(path);
+  async stat(path: string) {
     return convertNodeStats(await stat(path, { bigint: true }));
   }
 
-  rename(oldDirFd: fd_t, oldPath: string, newDirFd: fd_t, newPath: string) {
-    oldPath = this.getDir(oldDirFd).resolve(oldPath);
-    newPath = this.getDir(newDirFd).resolve(newPath);
+  rename(oldPath: string, newPath: string) {
     return rename(oldPath, newPath);
   }
 

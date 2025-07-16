@@ -385,8 +385,10 @@ export default class Bindings implements AsyncDisposable {
     return memory.buffer;
   }
 
-  private _getString(ptr: ptr<string>, len: number) {
-    return string.get(this._getBuffer(), ptr, len);
+  private _resolve(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) {
+    return this._openFiles
+      .getDir(dirFd)
+      .resolve(string.get(this._getBuffer(), pathPtr, pathLen));
   }
 
   addPreOpen(hostPath: string, wasiPath: string) {
@@ -509,8 +511,7 @@ export default class Bindings implements AsyncDisposable {
           this._getBuffer(),
           fdPtr,
           await this._openFiles.open(
-            dirFd,
-            this._getString(pathPtr, pathLen),
+            this._resolve(dirFd, pathPtr, pathLen),
             oFlags,
             fdFlags,
             Number(fsRightsBase),
@@ -558,7 +559,7 @@ export default class Bindings implements AsyncDisposable {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => this._openFiles.createDir(dirFd, this._getString(pathPtr, pathLen)),
+      ) => this._openFiles.createDir(this._resolve(dirFd, pathPtr, pathLen)),
       path_rename: async (
         oldDirFd: fd_t,
         oldPathPtr: ptr<string>,
@@ -568,16 +569,14 @@ export default class Bindings implements AsyncDisposable {
         newPathLen: number
       ) =>
         this._openFiles.rename(
-          oldDirFd,
-          this._getString(oldPathPtr, oldPathLen),
-          newDirFd,
-          this._getString(newPathPtr, newPathLen)
+          this._resolve(oldDirFd, oldPathPtr, oldPathLen),
+          this._resolve(newDirFd, newPathPtr, newPathLen)
         ),
       path_remove_directory: async (
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => this._openFiles.rmDir(dirFd, this._getString(pathPtr, pathLen)),
+      ) => this._openFiles.rmDir(this._resolve(dirFd, pathPtr, pathLen)),
       fd_readdir: async (
         fd: fd_t,
         bufPtr: ptr<dirent_t>,
@@ -597,7 +596,7 @@ export default class Bindings implements AsyncDisposable {
           if (bufLen < itemSize) {
             break;
           }
-          dirent_t.set(this._getBuffer(), bufPtr, {
+          dirent_t.set(buf, bufPtr, {
             next: ++cookie,
             ino: 0n, // TODO
             nameLen: nameLen,
@@ -605,15 +604,11 @@ export default class Bindings implements AsyncDisposable {
               ? FileType.Directory
               : FileType.RegularFile
           });
-          string.set(
-            this._getBuffer(),
-            (bufPtr + dirent_t.size) as ptr<string>,
-            name
-          );
+          string.set(buf, (bufPtr + dirent_t.size) as ptr<string>, name);
           bufPtr = (bufPtr + itemSize) as ptr<dirent_t>;
           bufLen -= itemSize;
         }
-        size_t.set(this._getBuffer(), bufUsedPtr, bufPtr - initialBufPtr);
+        size_t.set(buf, bufUsedPtr, bufPtr - initialBufPtr);
       },
       path_readlink: (
         dirFd: fd_t,
@@ -633,7 +628,7 @@ export default class Bindings implements AsyncDisposable {
         filestat_t.set(
           this._getBuffer(),
           filestatPtr,
-          await this._openFiles.stat(dirFd, this._getString(pathPtr, pathLen))
+          await this._openFiles.stat(this._resolve(dirFd, pathPtr, pathLen))
         ),
       fd_seek: async (
         fd: fd_t,
@@ -678,7 +673,7 @@ export default class Bindings implements AsyncDisposable {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => this._openFiles.rmFile(dirFd, this._getString(pathPtr, pathLen)),
+      ) => this._openFiles.rmFile(this._resolve(dirFd, pathPtr, pathLen)),
       poll_oneoff: async (
         subscriptionsPtr: ptr<subscription_t[]>,
         eventsPtr: ptr<event_t>,
