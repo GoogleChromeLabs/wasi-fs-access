@@ -26,7 +26,8 @@ import {
   uint16_t,
   uint32_t,
   uint64_t,
-  size_t
+  size_t,
+  inherit
 } from './type-desc.js';
 import { setTimeout, setImmediate } from 'node:timers/promises';
 
@@ -95,7 +96,8 @@ const filetype_t = enumer<FileType>(uint8_t);
 
 const fdflags_t = enumer<FdFlags>(uint16_t);
 
-const rights_t = uint64_t;
+type rights_t = bigint & { _name: 'rights' };
+const rights_t = inherit<bigint, Rights>(uint64_t, Number, BigInt);
 
 const fdstat_t = struct({
   filetype: filetype_t,
@@ -123,7 +125,12 @@ const linkcount_t = uint64_t;
 
 const filesize_t = uint64_t;
 
-const timestamp_t = uint64_t;
+export type timestamp_t = bigint & { _name: 'timestamp' };
+export const timestamp_t = inherit<timestamp_t, number>(
+  uint64_t as TypeDesc<timestamp_t>,
+  rawNs => Number(rawNs) / 1e6,
+  ms => BigInt(ms * 1e6) as timestamp_t
+);
 
 const filestat_t = struct({
   dev: device_t,
@@ -467,12 +474,11 @@ export default class Bindings implements AsyncDisposable {
     const bindings: Record<string, (...args: any[]) => void | Promise<void>> = {
       sched_yield: async () =>
         setImmediate(undefined, { signal: this._abortSignal }),
-      fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) => {
+      fd_prestat_get: (fd: fd_t, prestatPtr: ptr<prestat_t>) =>
         prestat_t.set(this._getBuffer(), prestatPtr, {
           type: PreOpenType.Dir,
           nameLen: Buffer.byteLength(this._openFiles.getPreOpen(fd).wasiPath)
-        });
-      },
+        }),
       fd_prestat_dir_name: (fd: fd_t, pathPtr: ptr<string>, pathLen: number) =>
         string.set(
           this._getBuffer(),
@@ -502,8 +508,8 @@ export default class Bindings implements AsyncDisposable {
         pathPtr: ptr<string>,
         pathLen: number,
         oFlags: OpenFlags,
-        fsRightsBase: bigint,
-        fsRightsInheriting: bigint,
+        fsRightsBase: rights_t,
+        fsRightsInheriting: rights_t,
         fdFlags: FdFlags,
         fdPtr: ptr<fd_t>
       ) =>
@@ -514,8 +520,8 @@ export default class Bindings implements AsyncDisposable {
             this._resolve(dirFd, pathPtr, pathLen),
             oFlags,
             fdFlags,
-            Number(fsRightsBase),
-            Number(fsRightsInheriting)
+            rights_t.fromRaw(fsRightsBase),
+            rights_t.fromRaw(fsRightsInheriting)
           )
         ),
       fd_fdstat_set_flags: (fd: fd_t, flags: FdFlags) => unimplemented(),
@@ -551,8 +557,8 @@ export default class Bindings implements AsyncDisposable {
         fdstat_t.set(this._getBuffer(), fdstatPtr, {
           filetype: stats.filetype,
           flags: FdFlags.None,
-          rightsBase: /* anything */ -1n,
-          rightsInheriting: /* anything but symlink */ ~(1n << 24n)
+          rightsBase: Rights.All,
+          rightsInheriting: ~Rights.PathSymlink
         });
       },
       path_create_directory: async (
@@ -656,13 +662,12 @@ export default class Bindings implements AsyncDisposable {
         openFile.position = pos;
         uint64_t.set(this._getBuffer(), filesizePtr, BigInt(pos));
       },
-      fd_tell: (fd: fd_t, offsetPtr: ptr<bigint>) => {
+      fd_tell: (fd: fd_t, offsetPtr: ptr<bigint>) =>
         uint64_t.set(
           this._getBuffer(),
           offsetPtr,
           BigInt(this._openFiles.getFile(fd).position)
-        );
-      },
+        ),
       fd_filestat_get: async (fd: fd_t, filestatPtr: ptr<filestat_t>) =>
         filestat_t.set(
           this._getBuffer(),
@@ -769,18 +774,11 @@ export default class Bindings implements AsyncDisposable {
         unimplemented(),
       clock_time_get: (
         id: ClockId,
-        precision: bigint,
-        resultPtr: ptr<bigint>
-      ) => {
-        timestamp_t.set(
-          this._getBuffer(),
-          resultPtr,
-          BigInt(Math.round(getTime(id) * 1_000_000))
-        );
-      },
-      clock_res_get: (id: ClockId, resultPtr: ptr<bigint>) => {
-        timestamp_t.set(this._getBuffer(), resultPtr, /* 1ms */ 1_000_000n);
-      },
+        precision: timestamp_t,
+        resultPtr: ptr<timestamp_t>
+      ) => timestamp_t.set(this._getBuffer(), resultPtr, getTime(id)),
+      clock_res_get: (id: ClockId, resultPtr: ptr<timestamp_t>) =>
+        timestamp_t.set(this._getBuffer(), resultPtr, 1 /* ms */),
       fd_allocate: (fd: fd_t, offset: bigint, len: bigint) => unimplemented(),
       fd_advise: (fd: fd_t, offset: bigint, len: bigint, advice: number) =>
         unimplemented(),

@@ -17,15 +17,19 @@
 
 export type ptr<T> = number & { _pointerTarget: T };
 
-export interface TypeDesc<T> {
+export interface TypeDesc<T, U = T> {
   size: number;
   align: number;
-
-  get(buf: ArrayBuffer, ptr: ptr<T>): T;
-  set(buf: ArrayBuffer, ptr: ptr<T>, value: T): void;
+  get(this: unknown, buf: ArrayBuffer, ptr: ptr<T>): U;
+  set(this: unknown, buf: ArrayBuffer, ptr: ptr<T>, value: U): void;
 }
 
-export type TargetType<D> = D extends TypeDesc<infer T> ? T : never;
+export interface MappedTypeDesc<T, U> extends TypeDesc<T, U> {
+  fromRaw(raw: T): U;
+  toRaw(value: U): T;
+}
+
+export type TargetType<D> = D extends TypeDesc<any, infer U> ? U : never;
 
 const getDataView = (() => {
   const cache = new WeakMap<ArrayBuffer, DataView>();
@@ -47,12 +51,8 @@ function std<T = number>(name: string, size: number): TypeDesc<T> {
   return {
     size,
     align: size,
-    get(buf, ptr) {
-      return get.call(getDataView(buf), ptr, true);
-    },
-    set(buf, ptr, value) {
-      return set.call(getDataView(buf), ptr, value, true);
-    }
+    get: (buf, ptr) => get.call(getDataView(buf), ptr, true),
+    set: (buf, ptr, value) => set.call(getDataView(buf), ptr, value, true)
   };
 }
 
@@ -61,9 +61,8 @@ export const string = (() => {
   const textDecoder = new TextDecoder();
 
   return {
-    get(buf: ArrayBuffer, ptr: ptr<string>, len: number) {
-      return textDecoder.decode(new Uint8Array(buf, ptr, len));
-    },
+    get: (buf: ArrayBuffer, ptr: ptr<string>, len: number) =>
+      textDecoder.decode(new Uint8Array(buf, ptr, len)),
     set(
       buf: ArrayBuffer,
       ptr: ptr<string>,
@@ -91,7 +90,7 @@ function alignTo(ptr: number, align: number): number {
 
 export function struct<T extends Record<string, TypeDesc<any>>>(
   desc: T
-): TypeDesc<{ [K in keyof T]: T[K] extends TypeDesc<infer F> ? F : never }> {
+): TypeDesc<{ [K in keyof T]: TargetType<T[K]> }> {
   class Ctor {
     constructor(protected _buf: ArrayBuffer, protected _ptr: number) {}
   }
@@ -117,12 +116,8 @@ export function struct<T extends Record<string, TypeDesc<any>>>(
   return {
     size: offset,
     align: structAlign,
-    get(buf, ptr) {
-      return new Ctor(buf, ptr) as any;
-    },
-    set(buf, ptr, value) {
-      Object.assign(new Ctor(buf, ptr), value);
-    }
+    get: (buf, ptr) => new Ctor(buf, ptr) as any,
+    set: (buf, ptr, value) => Object.assign(new Ctor(buf, ptr), value)
   };
 }
 
@@ -137,7 +132,7 @@ export function taggedUnion<
   data: T;
 }): TypeDesc<
   {
-    [K in E]: { tag: K; data: T[K] extends TypeDesc<infer F> ? F : never };
+    [K in E]: { tag: K; data: TargetType<T[K]> };
   }[E]
 > {
   let unionSize = 0;
@@ -183,3 +178,19 @@ export const int64_t = std<bigint>('bigint64', 8);
 export const uint64_t = std<bigint>('BigUint64', 8);
 
 export const size_t = uint32_t;
+
+export function inherit<T, U>(
+  { size, align, get, set }: TypeDesc<T>,
+  fromRaw: (raw: T) => U,
+  toRaw: (value: U) => T
+): MappedTypeDesc<T, U> {
+  return {
+    size,
+    align,
+    fromRaw,
+    toRaw,
+    get: (buf: ArrayBuffer, ptr: ptr<T>) => fromRaw(get(buf, ptr as ptr<any>)),
+    set: (buf: ArrayBuffer, ptr: ptr<T>, value: U) =>
+      set(buf, ptr as ptr<any>, toRaw(value))
+  };
+}

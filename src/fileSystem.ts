@@ -24,7 +24,8 @@ import {
   FileType,
   Rights,
   filestat_t,
-  NoPreopen
+  NoPreopen,
+  timestamp_t
 } from './bindings.js';
 import { join as joinPath } from 'node:path/posix';
 import { promisify } from 'node:util';
@@ -298,9 +299,9 @@ function convertNodeStats(stats: BigIntStats): filestat_t {
     filetype: getFileType(stats),
     nlink: stats.nlink,
     size: stats.size,
-    accessTime: stats.atimeNs,
-    modTime: stats.mtimeNs,
-    changeTime: stats.ctimeNs
+    accessTime: timestamp_t.fromRaw(stats.atimeNs as timestamp_t),
+    modTime: timestamp_t.fromRaw(stats.mtimeNs as timestamp_t),
+    changeTime: timestamp_t.fromRaw(stats.ctimeNs as timestamp_t)
   };
 }
 
