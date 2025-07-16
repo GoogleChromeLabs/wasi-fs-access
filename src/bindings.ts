@@ -606,12 +606,17 @@ export default class Bindings implements AsyncDisposable {
           dirent_t.set(buf, bufPtr, {
             next: ++cookie,
             ino: 0n, // TODO
-            nameLen: nameLen,
+            nameLen,
             type: entry.isDirectory()
               ? FileType.Directory
               : FileType.RegularFile
           });
-          string.set(buf, (bufPtr + dirent_t.size) as ptr<string>, name);
+          string.set(
+            buf,
+            (bufPtr + dirent_t.size) as ptr<string>,
+            name,
+            nameLen
+          );
           bufPtr = (bufPtr + itemSize) as ptr<dirent_t>;
           bufLen -= itemSize;
         }
