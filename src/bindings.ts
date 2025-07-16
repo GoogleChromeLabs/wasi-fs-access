@@ -129,7 +129,7 @@ export type timestamp_t = bigint & { _name: 'timestamp' };
 export const timestamp_t = inherit<timestamp_t, number>(
   uint64_t as TypeDesc<timestamp_t>,
   rawNs => Number(rawNs) / 1e6,
-  ms => BigInt(ms * 1e6) as timestamp_t
+  ms => BigInt(Math.round(ms * 1e6)) as timestamp_t
 );
 
 const filestat_t = struct({
