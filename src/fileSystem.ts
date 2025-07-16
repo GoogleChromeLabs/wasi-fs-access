@@ -146,10 +146,23 @@ export class OpenDirectory extends OpenFile {
     return new OpenDirectory(hostPath, await open(hostPath, fsc.O_DIRECTORY));
   }
 
-  private _entries?: Dirent[];
+  private _entries?: Pick<Dirent, 'name' | 'isFile' | 'isDirectory'>[];
 
   async getEntries(start = 0) {
-    this._entries ??= await readdir(this._hostPath, { withFileTypes: true });
+    this._entries ??= [
+      // Add fake entries for '.' and '..' to match expected WASI behaviour.
+      {
+        name: '.',
+        isFile: () => false,
+        isDirectory: () => true
+      },
+      {
+        name: '..',
+        isFile: () => false,
+        isDirectory: () => true
+      },
+      ...(await readdir(this._hostPath, { withFileTypes: true }))
+    ];
     return this._entries.slice(start);
   }
 
