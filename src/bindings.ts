@@ -288,6 +288,20 @@ export const enum Rights {
     Rights.FdSync |
     Rights.FdAllocate |
     Rights.FdFilestatSetSize,
+  AllPath = Rights.PathCreateDirectory |
+    Rights.PathCreateFile |
+    Rights.PathLinkSource |
+    Rights.PathLinkTarget |
+    Rights.PathOpen |
+    Rights.PathReadlink |
+    Rights.PathRenameSource |
+    Rights.PathRenameTarget |
+    Rights.PathFilestatGet |
+    Rights.PathFilestatSetSize |
+    Rights.PathFilestatSetTimes |
+    Rights.PathSymlink |
+    Rights.PathRemoveDirectory |
+    Rights.PathUnlinkFile,
   All = -1 // All rights, used for rightsInheriting
 }
 
@@ -552,13 +566,17 @@ export default class Bindings implements AsyncDisposable {
         nwrittenPtr: ptr<number>
       ) => this._fileWrite(fd, iovsPtr, iovsLen, nwrittenPtr),
       fd_fdstat_get: async (fd: fd_t, fdstatPtr: ptr<fdstat_t>) => {
-        let stats = await this._openFiles.get(fd).stat();
+        let file = this._openFiles.get(fd);
+        let stats = await file.stat();
         fdstat_t.set(this._getBuffer(), fdstatPtr, {
           filetype: stats.filetype,
-          flags: FdFlags.None,
-          rightsBase:
-            stats.filetype === FileType.Directory ? ~Rights.FdSeek : Rights.All,
-          rightsInheriting: ~Rights.PathSymlink
+          flags: file.fdFlags,
+          rightsBase: ~(stats.filetype === FileType.Directory
+            ? Rights.FdSeek
+            : Rights.AllPath),
+          rightsInheriting: ~(stats.filetype === FileType.Directory
+            ? Rights.PathSymlink
+            : Rights.AllPath)
         });
       },
       path_create_directory: async (
@@ -617,13 +635,13 @@ export default class Bindings implements AsyncDisposable {
           bufPtr = (bufPtr + dirent_t.size) as ptr<dirent_t>;
           bufLen -= dirent_t.size;
           try {
-          string.set(
-            buf,
+            string.set(
+              buf,
               bufPtr as ptr<string>,
-            name,
+              name,
               // Don't overflow the buffer.
               Math.min(nameLen, bufLen)
-          );
+            );
           } catch (e) {
             if (e instanceof RangeError) {
               // If the string doesn't fit, we just stop here.
