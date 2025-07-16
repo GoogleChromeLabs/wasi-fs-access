@@ -117,7 +117,7 @@ const dirent_t = struct({
   nameLen: uint32_t,
   type: filetype_t
 });
-type dirent_t = TargetType<typeof dirent_t>;
+export type dirent_t = TargetType<typeof dirent_t>;
 
 const device_t = uint64_t;
 
@@ -586,39 +586,56 @@ export default class Bindings implements AsyncDisposable {
       ) => this._openFiles.rmDir(this._resolve(dirFd, pathPtr, pathLen)),
       fd_readdir: async (
         fd: fd_t,
-        bufPtr: ptr<dirent_t>,
+        bufPtr: ptr<dirent_t | string>,
         bufLen: number,
-        cookie: bigint,
+        next: bigint,
         bufUsedPtr: ptr<number>
       ) => {
         const initialBufPtr = bufPtr;
         let openDir = this._openFiles.getDir(fd);
-        let pos = Number(cookie);
         let buf = this._getBuffer();
-        for (let entry of await openDir.getEntries(pos)) {
+        for (let entry of await openDir.getEntries(Number(next))) {
           this._checkAbort();
           let { name } = entry;
           let nameLen = Buffer.byteLength(name);
-          let itemSize = dirent_t.size + nameLen;
-          if (bufLen < itemSize) {
+          let dirEnt: dirent_t = {
+            next: ++next,
+            ino: entry.ino,
+            nameLen,
+            type: entry.type
+          };
+          if (bufLen < dirent_t.size) {
+            // Insufficient space, but we must write as much as we can.
+            // Do this by writing the whole thing into a temporary buffer.
+            let tempBuf = new Uint8Array(dirent_t.size);
+            dirent_t.set(tempBuf.buffer, 0 as ptr<dirent_t>, dirEnt);
+            new Uint8Array(buf, bufPtr).set(tempBuf.subarray(0, bufLen));
+            // Tell consumer that we filled the entire buffer so it's not an EOF.
+            bufPtr = (bufPtr + bufLen) as ptr<dirent_t>;
             break;
           }
-          dirent_t.set(buf, bufPtr, {
-            next: ++cookie,
-            ino: 0n, // TODO
-            nameLen,
-            type: entry.isDirectory()
-              ? FileType.Directory
-              : FileType.RegularFile
-          });
+          dirent_t.set(buf, bufPtr as ptr<dirent_t>, dirEnt);
+          bufPtr = (bufPtr + dirent_t.size) as ptr<dirent_t>;
+          bufLen -= dirent_t.size;
+          try {
           string.set(
             buf,
-            (bufPtr + dirent_t.size) as ptr<string>,
+              bufPtr as ptr<string>,
             name,
-            nameLen
+              // Don't overflow the buffer.
+              Math.min(nameLen, bufLen)
           );
-          bufPtr = (bufPtr + itemSize) as ptr<dirent_t>;
-          bufLen -= itemSize;
+          } catch (e) {
+            if (e instanceof RangeError) {
+              // If the string doesn't fit, we just stop here.
+              // Tell consumer that we filled the entire buffer so it's not an EOF.
+              bufPtr = (bufPtr + bufLen) as ptr<dirent_t>;
+              break;
+            }
+            throw e;
+          }
+          bufPtr = (bufPtr + nameLen) as ptr<dirent_t>;
+          bufLen -= nameLen;
         }
         size_t.set(buf, bufUsedPtr, bufPtr - initialBufPtr);
       },

@@ -25,7 +25,8 @@ import {
   Rights,
   filestat_t,
   NoPreopen,
-  timestamp_t
+  timestamp_t,
+  dirent_t
 } from './bindings.js';
 import { resolve as resolvePath, join as joinPath } from 'node:path/posix';
 import { promisify } from 'node:util';
@@ -147,6 +148,8 @@ export class OpenFile implements AsyncDisposable {
   }
 }
 
+type DirentInfo = Omit<dirent_t, 'next' | 'nameLen'> & { name: string };
+
 export class OpenDirectory extends OpenFile {
   constructor(private readonly _hostPath: string, hostFd: number) {
     super(hostFd, false);
@@ -161,24 +164,33 @@ export class OpenDirectory extends OpenFile {
     throw new SystemError(E.NOTCAPABLE);
   }
 
-  private _entries?: Pick<Dirent, 'name' | 'isFile' | 'isDirectory'>[];
+  private _entries?: Promise<DirentInfo[]>;
+
+  private async *_readDirents() {
+    let names = ['.', '..', ...(await readdir(this._hostPath))];
+    for (const name of names) {
+      // Mostly needed for the 'ino' field, as Node.js doesn't expose it in Dirent.
+      // Otherwise we could've used `withFileTypes` option in `readdir` itself.
+      let stats: Pick<BigIntStats, 'ino' | 'mode'> = await stat(
+        // Note: this will expose `ino` for `..` too, but I guess it's fine?
+        joinPath(this._hostPath, name),
+        { bigint: true }
+      );
+      yield {
+        name,
+        type: getFileType(stats),
+        ino: stats.ino
+      };
+    }
+  }
 
   async getEntries(start = 0) {
-    this._entries ??= [
-      // Add fake entries for '.' and '..' to match expected WASI behaviour.
-      {
-        name: '.',
-        isFile: () => false,
-        isDirectory: () => true
-      },
-      {
-        name: '..',
-        isFile: () => false,
-        isDirectory: () => true
-      },
-      ...(await readdir(this._hostPath, { withFileTypes: true }))
-    ];
-    return this._entries.slice(start);
+    // If we are starting from the beginning, refresh the entries as the directory might have changed.
+    // Otherwise, continue from the same snapshot.
+    if (start === 0) {
+      this._entries = Array.fromAsync(this._readDirents());
+    }
+    return (await this._entries!).slice(start);
   }
 
   resolve(path: string) {
@@ -337,7 +349,7 @@ function convertNodeStats(stats: BigIntStats): filestat_t {
   };
 }
 
-export function getFileType(stats: BigIntStats): FileType {
+export function getFileType(stats: Pick<BigIntStats, 'mode'>): FileType {
   const kind = Number(stats.mode) & fsc.S_IFMT;
 
   switch (kind) {
