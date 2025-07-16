@@ -236,7 +236,7 @@ export const enum OpenFlags {
   None = 0,
   Create = 1 << 0,
   Directory = 1 << 1,
-  Exclusive = Create | (1 << 2),
+  Exclusive = 1 << 2,
   Truncate = 1 << 3
 }
 
