@@ -1,8 +1,12 @@
 import subprocess
 import sys
-import os
+from pathlib import Path
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-script_path = os.path.join(script_dir, "test-adapter.ts")
-r = subprocess.run(["node", "--experimental-wasm-jspi", "--import", "tsx", script_path, *sys.argv[1:]])
-sys.exit(r.returncode)
+tests_dir = Path(__file__).parent
+
+try:
+	subprocess.run(["node", "--inspect", "--experimental-wasm-jspi", "--import", "tsx", tests_dir / "test-adapter.ts", *sys.argv[1:]], check=True)
+except:
+	# If the test fails, it keeps garbage around which results in different failures for subsequent tests. Clean it up.
+	subprocess.run(["git", "-C", tests_dir / "wasi-testsuite", "clean", "-df"], check=True)
+	raise
