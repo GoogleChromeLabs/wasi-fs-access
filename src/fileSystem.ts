@@ -27,7 +27,7 @@ import {
   NoPreopen,
   timestamp_t
 } from './bindings.js';
-import { join as joinPath } from 'node:path/posix';
+import { resolve as resolvePath, join as joinPath } from 'node:path/posix';
 import { promisify } from 'node:util';
 
 // Note: not using fs/promises because it doesn't allow constructing file handles from raw fd, and we need some file ops for stdin/stdout/stderr.
@@ -201,6 +201,10 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   public async addPreOpen(wasiPath: string, hostPath: string) {
+    // We'll be judging "did this thing resolve outside the preopen directory" by checking if the resolved path starts with the preopen path.
+    // In order to do that, we need to store a fully resolved path.
+    hostPath = resolvePath(hostPath);
+
     this._add(
       new PreopenDirectory(
         wasiPath,
