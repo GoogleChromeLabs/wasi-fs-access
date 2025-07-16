@@ -678,7 +678,18 @@ export default class Bindings implements AsyncDisposable {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => this._openFiles.rmFile(this._resolve(dirFd, pathPtr, pathLen)),
+      ) => {
+        let path = this._resolve(dirFd, pathPtr, pathLen);
+        if (path.endsWith('/')) {
+          // If the path ends with a slash, throw an error to appease WASI.
+          throw new SystemError(
+            (await this._openFiles.stat(path)).filetype === FileType.Directory
+              ? E.ISDIR
+              : E.NOTDIR
+          );
+        }
+        return this._openFiles.rmFile(path);
+      },
       poll_oneoff: async (
         subscriptionsPtr: ptr<subscription_t[]>,
         eventsPtr: ptr<event_t>,
