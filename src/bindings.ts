@@ -611,7 +611,7 @@ export default class Bindings implements AsyncDisposable {
         const initialBufPtr = bufPtr;
         let openDir = this._openFiles.getDir(fd);
         let buf = this._getBuffer();
-        for (let entry of await openDir.getEntries(Number(next))) {
+        for await (let entry of openDir.getEntries(Number(next))) {
           this._checkAbort();
           let { name } = entry;
           let nameLen = Buffer.byteLength(name);

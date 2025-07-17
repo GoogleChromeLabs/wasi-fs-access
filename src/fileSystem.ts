@@ -158,6 +158,34 @@ export class OpenFile implements AsyncDisposable {
 
 type DirentInfo = Omit<dirent_t, 'next' | 'nameLen'> & { name: string };
 
+// Lazy iterable that caches previous runs and can be restarted from arbitrary position.
+// This is useful for reading directories in WASI, where the caller can pass an arbitrary
+// index to start from. No need to reread metadata for items we've already seen.
+function cachingIterable<T>(iter: AsyncIterable<T>): AsyncIterable<T> {
+  let cache: T[] = [];
+
+  async function* impl() {
+    for (let item of cache) {
+      yield item;
+    }
+
+    for await (let item of iter) {
+      cache.push(item);
+      yield item;
+    }
+  }
+
+  return {
+    [Symbol.asyncIterator]() {
+      let implIter = impl();
+      // We don't want `return()` to propagate to `iter` and stop it altogether
+      // as we want to reuse it in future calls. Override it.
+      implIter.return = async value => ({ done: true, value: await value });
+      return implIter;
+    }
+  };
+}
+
 export class OpenDirectory extends OpenFile {
   constructor(private readonly _hostPath: string, hostFd: number) {
     super(hostFd, FdFlags.None);
@@ -172,7 +200,7 @@ export class OpenDirectory extends OpenFile {
     throw new SystemError(E.NOTCAPABLE);
   }
 
-  private _entries?: Promise<DirentInfo[]>;
+  private _entries?: AsyncIterable<DirentInfo>;
 
   private async *_readDirents(): AsyncIterable<DirentInfo> {
     yield {
@@ -199,22 +227,35 @@ export class OpenDirectory extends OpenFile {
     }
   }
 
-  async getEntries(start = 0) {
+  async *getEntries(start = 0) {
     // If we are starting from the beginning, refresh the entries as the directory might have changed.
     // Otherwise, continue from the same snapshot.
-    if (start === 0) {
-      this._entries = Array.fromAsync(this._readDirents());
+    if (start === 0 || !this._entries) {
+      this._entries = cachingIterable(this._readDirents());
     }
-    return (await this._entries!).slice(start);
+    for await (const item of this._entries) {
+      if (start-- > 0) {
+        continue;
+      }
+      yield item;
+    }
   }
 
   resolve(path: string) {
-    path = resolvePath(this._hostPath, path);
-    if (path !== this._hostPath && !path.startsWith(`${this._hostPath}/`)) {
+    let resolvedPath = resolvePath(this._hostPath, path);
+    // WASI cares about trailing slash in some places, but Node's `resolve` removes it.
+    // Add it back manually.
+    if (path.endsWith('/')) {
+      resolvedPath += '/';
+    }
+    if (
+      !resolvedPath.startsWith(`${this._hostPath}/`) &&
+      resolvedPath !== this._hostPath
+    ) {
       // Prevent access outside the given directory descriptor.
       throw new SystemError(E.NOTCAPABLE);
     }
-    return path;
+    return resolvedPath;
   }
 }
 
@@ -364,7 +405,7 @@ function convertNodeStats(stats: BigIntStats): filestat_t {
   };
 }
 
-export function getFileType(stats: Pick<BigIntStats, 'mode'>): FileType {
+export function getFileType(stats: BigIntStats): FileType {
   const kind = Number(stats.mode) & fsc.S_IFMT;
 
   switch (kind) {
