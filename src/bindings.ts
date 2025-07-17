@@ -138,9 +138,10 @@ const filestat_t = struct({
   filetype: filetype_t,
   nlink: linkcount_t,
   size: filesize_t,
-  accessTime: timestamp_t,
-  modTime: timestamp_t,
-  changeTime: timestamp_t
+  // Not mapping timestamp_t here because we don't need the ms conversion most of the time.
+  accessTimeNs: uint64_t as TypeDesc<timestamp_t>,
+  modTimeNs: uint64_t as TypeDesc<timestamp_t>,
+  changeTimeNs: uint64_t as TypeDesc<timestamp_t>
 });
 export type filestat_t = TargetType<typeof filestat_t>;
 
@@ -307,10 +308,14 @@ export const enum Rights {
 
 export const enum SetTimeFlags {
   None = 0,
-  AccessTime = 1 << 0,
+
+  AccessTimeExplicit = 1 << 0,
   AccessTimeNow = 1 << 1,
-  ModificationTime = 1 << 2,
-  ModificationTimeNow = 1 << 3
+  AccessTime = AccessTimeExplicit | AccessTimeNow,
+
+  ModificationTimeExplicit = 1 << 2,
+  ModificationTimeNow = 1 << 3,
+  ModificationTime = ModificationTimeExplicit | ModificationTimeNow
 }
 
 function unimplemented() {
@@ -849,21 +854,30 @@ export default class Bindings implements AsyncDisposable {
       fd_allocate: (fd: fd_t, offset: bigint, len: bigint) => unimplemented(),
       fd_advise: (fd: fd_t, offset: bigint, len: bigint, advice: number) =>
         unimplemented(),
-      fd_filestat_set_times: (
+      fd_filestat_set_times: async (
         fd: fd_t,
-        atim: bigint,
-        mtim: bigint,
+        newAccessTimeNs: timestamp_t,
+        newModTimeNs: timestamp_t,
         flags: SetTimeFlags
-      ) => unimplemented(),
-      path_filestat_set_times: (
+      ) =>
+        this._openFiles
+          .getFile(fd)
+          .setTimes(flags, newAccessTimeNs, newModTimeNs),
+      path_filestat_set_times: async (
         dirFd: fd_t,
         lookupFlags: number,
-        path: ptr<string>,
+        pathPtr: ptr<string>,
         pathLen: number,
-        atim: bigint,
-        mtim: bigint,
+        newAccessTimeNs: timestamp_t,
+        newModTimeNs: timestamp_t,
         flags: SetTimeFlags
-      ) => unimplemented(),
+      ) =>
+        this._openFiles.setTimes(
+          this._resolve(dirFd, pathPtr, pathLen),
+          flags,
+          newAccessTimeNs,
+          newModTimeNs
+        ),
       fd_fdstat_set_rights: (
         fd: fd_t,
         rightsBase: bigint,

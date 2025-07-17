@@ -14,7 +14,15 @@
 
 import type { BigIntStats } from 'node:fs';
 import * as fs from 'node:fs';
-import { mkdir, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises';
+import {
+  mkdir,
+  readdir,
+  rename,
+  rmdir,
+  stat,
+  unlink,
+  utimes
+} from 'node:fs/promises';
 import {
   fd_t,
   OpenFlags,
@@ -26,7 +34,8 @@ import {
   filestat_t,
   NoPreopen,
   timestamp_t,
-  dirent_t
+  dirent_t,
+  SetTimeFlags
 } from './bindings.js';
 import { resolve as resolvePath } from 'node:path/posix';
 import { promisify } from 'node:util';
@@ -39,10 +48,54 @@ const fstat = promisify(fs.fstat);
 const fdatasync = promisify(fs.fdatasync);
 const fsync = promisify(fs.fsync);
 const fruncate = promisify(fs.ftruncate);
-const utimes = promisify(fs.futimes);
+const futimes = promisify(fs.futimes);
 const close = promisify(fs.close);
 
 const fsc = fs.constants;
+
+// Unfortunately, utime doesn't support bigint, so we need to convert times to Date (milliseconds).
+// This might result in a precision loss.
+// See https://github.com/nodejs/node/issues/56492.
+async function setTimes<T>(
+  file: T,
+  stat: (file: T, opts: { bigint: true }) => Promise<BigIntStats>,
+  flags: SetTimeFlags,
+  newAccessTime: timestamp_t,
+  newModTime: timestamp_t,
+  utimes: (file: T, atime: Date, mtime: Date) => Promise<void>
+) {
+  let { atime, mtime } = await stat(file, { bigint: true });
+
+  let now = new Date();
+
+  switch (flags & SetTimeFlags.AccessTime) {
+    case SetTimeFlags.AccessTimeExplicit:
+      atime = new Date(timestamp_t.fromRaw(newAccessTime));
+      break;
+    case SetTimeFlags.AccessTimeNow:
+      atime = now;
+      break;
+    case SetTimeFlags.None:
+      break;
+    default:
+      throw new RangeError('Invalid access time flag');
+  }
+
+  switch (flags & SetTimeFlags.ModificationTime) {
+    case SetTimeFlags.ModificationTimeExplicit:
+      mtime = new Date(timestamp_t.fromRaw(newModTime));
+      break;
+    case SetTimeFlags.ModificationTimeNow:
+      mtime = now;
+      break;
+    case SetTimeFlags.None:
+      break;
+    default:
+      throw new RangeError('Invalid modification time flag');
+  }
+
+  await utimes(file, atime, mtime);
+}
 
 export class OpenFile implements AsyncDisposable {
   constructor(private readonly hostFd: number, public fdFlags: FdFlags) {}
@@ -121,7 +174,7 @@ export class OpenFile implements AsyncDisposable {
   }
 
   async stat() {
-    return convertNodeStats(await fstat(this.hostFd, { bigint: true }));
+    return getNodeStats(this.hostFd, fstat);
   }
 
   datasync() {
@@ -136,12 +189,18 @@ export class OpenFile implements AsyncDisposable {
     return fruncate(this.hostFd, size);
   }
 
-  setTimes(accessTimeNs: bigint, modTimeNs: bigint) {
-    // Node.js doesn't support setting change time, so we ignore it.
-    return utimes(
+  setTimes(
+    flags: SetTimeFlags,
+    newAccessTime: timestamp_t,
+    newModTime: timestamp_t
+  ) {
+    return setTimes(
       this.hostFd,
-      Number(accessTimeNs) / 1e6,
-      Number(modTimeNs) / 1e6
+      fstat,
+      flags,
+      newAccessTime,
+      newModTime,
+      futimes
     );
   }
 
@@ -358,7 +417,16 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   async stat(path: string) {
-    return convertNodeStats(await stat(path, { bigint: true }));
+    return getNodeStats(path, stat);
+  }
+
+  setTimes(
+    path: string,
+    flags: SetTimeFlags,
+    accessTimeNs: timestamp_t,
+    modTimeNs: timestamp_t
+  ) {
+    return setTimes(path, stat, flags, accessTimeNs, modTimeNs, utimes);
   }
 
   rename(oldPath: string, newPath: string) {
@@ -389,16 +457,21 @@ export class OpenFiles implements AsyncDisposable {
   }
 }
 
-function convertNodeStats(stats: BigIntStats): filestat_t {
+async function getNodeStats<T>(
+  file: T,
+  stat: (file: T, opts: { bigint: true }) => Promise<BigIntStats>
+): Promise<filestat_t> {
+  const stats = await stat(file, { bigint: true });
+
   return {
     dev: stats.dev,
     ino: stats.ino,
     filetype: getFileType(stats),
     nlink: stats.nlink,
     size: stats.size,
-    accessTime: timestamp_t.fromRaw(stats.atimeNs as timestamp_t),
-    modTime: timestamp_t.fromRaw(stats.mtimeNs as timestamp_t),
-    changeTime: timestamp_t.fromRaw(stats.ctimeNs as timestamp_t)
+    accessTimeNs: stats.atimeNs as timestamp_t,
+    modTimeNs: stats.mtimeNs as timestamp_t,
+    changeTimeNs: stats.ctimeNs as timestamp_t
   };
 }
 
