@@ -15,11 +15,14 @@
 import type { BigIntStats } from 'node:fs';
 import * as fs from 'node:fs';
 import {
+  lstat,
   mkdir,
   readdir,
+  readlink,
   rename,
   rmdir,
   stat,
+  symlink,
   unlink,
   utimes
 } from 'node:fs/promises';
@@ -35,7 +38,8 @@ import {
   NoPreopen,
   timestamp_t,
   dirent_t,
-  SetTimeFlags
+  SetTimeFlags,
+  LookupFlags
 } from './bindings.js';
 import { resolve as resolvePath } from 'node:path/posix';
 import { promisify } from 'node:util';
@@ -467,17 +471,36 @@ export class OpenFiles implements AsyncDisposable {
     return rmdir(path);
   }
 
-  async stat(path: string) {
-    return getNodeStats(path, stat);
+  async stat(path: string, lookupFlags: LookupFlags) {
+    return getNodeStats(
+      path,
+      lookupFlags & LookupFlags.FollowSymlinks ? stat : lstat
+    );
   }
 
   setTimes(
     path: string,
+    lookupFlags: LookupFlags,
     flags: SetTimeFlags,
     accessTimeNs: timestamp_t,
     modTimeNs: timestamp_t
   ) {
-    return setTimes(path, stat, flags, accessTimeNs, modTimeNs, utimes);
+    return setTimes(
+      path,
+      lookupFlags & LookupFlags.FollowSymlinks ? stat : lstat,
+      flags,
+      accessTimeNs,
+      modTimeNs,
+      utimes
+    );
+  }
+
+  link(src: string, dst: string) {
+    return symlink(src, dst);
+  }
+
+  readLink(path: string) {
+    return readlink(path);
   }
 
   rename(oldPath: string, newPath: string) {

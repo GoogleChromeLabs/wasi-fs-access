@@ -64,13 +64,14 @@ export const string = (() => {
     get: (buf: ArrayBuffer, ptr: ptr<string>, len: number) =>
       textDecoder.decode(new Uint8Array(buf, ptr, len)),
     set(buf: ArrayBuffer, ptr: ptr<string>, value: string, len: number) {
-      let { read } = textEncoder.encodeInto(
+      let { read, written } = textEncoder.encodeInto(
         value,
         new Uint8Array(buf, ptr, len)
       );
       if (read < value.length) {
         throw new RangeError('Insufficient space for the string');
       }
+      return written;
     }
   };
 })();

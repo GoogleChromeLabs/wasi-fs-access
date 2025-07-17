@@ -213,6 +213,11 @@ const event_t = struct({
 });
 type event_t = TargetType<typeof event_t>;
 
+export const enum LookupFlags {
+  None,
+  FollowSymlinks = 1 << 0
+}
+
 export class SystemError extends Error {
   constructor(public readonly code: E) {
     super(`E${E[code]}`);
@@ -509,13 +514,18 @@ export default class Bindings implements AsyncDisposable {
           type: PreOpenType.Dir,
           nameLen: Buffer.byteLength(this._openFiles.getPreOpen(fd).wasiPath)
         }),
-      fd_prestat_dir_name: (fd: fd_t, pathPtr: ptr<string>, pathLen: number) =>
+      fd_prestat_dir_name: (
+        fd: fd_t,
+        pathPtr: ptr<string>,
+        pathLen: number
+      ) => {
         string.set(
           this._getBuffer(),
           pathPtr,
           this._openFiles.getPreOpen(fd).wasiPath,
           pathLen
-        ),
+        );
+      },
       environ_sizes_get: (countPtr: ptr<number>, sizePtr: ptr<number>) =>
         this._env.sizes_get(this._getBuffer(), countPtr, sizePtr),
       environ_get: (environPtr: ptr<Uint32Array>, environBufPtr: ptr<string>) =>
@@ -534,7 +544,7 @@ export default class Bindings implements AsyncDisposable {
       },
       path_open: async (
         dirFd: fd_t,
-        dirFlags: number,
+        lookupFlags: LookupFlags,
         pathPtr: ptr<string>,
         pathLen: number,
         oFlags: OpenFlags,
@@ -684,7 +694,7 @@ export default class Bindings implements AsyncDisposable {
             // Try to stat the path to see if it actually exists.
             // If this fails, it will fail with ENOENT again, which is fine, but
             // if it doesn't, it means we should throw E.NOTDIR instead.
-            await this._openFiles.stat(path);
+            await this._openFiles.stat(path, LookupFlags.FollowSymlinks);
             throw new SystemError(E.NOTDIR);
           }
           throw e;
@@ -745,17 +755,26 @@ export default class Bindings implements AsyncDisposable {
         }
         size_t.set(buf, bufUsedPtr, bufPtr - initialBufPtr);
       },
-      path_readlink: (
+      path_readlink: async (
         dirFd: fd_t,
-        pathPtr: number,
+        pathPtr: ptr<string>,
         pathLen: number,
-        bufPtr: number,
+        bufPtr: ptr<string>,
         bufLen: number,
-        bufUsedPtr: number
-      ) => unimplemented(),
+        bufUsedPtr: ptr<number>
+      ) => {
+        let contents = await this._openFiles.readLink(
+          this._resolve(dirFd, pathPtr, pathLen, Rights.PathReadlink)
+        );
+        uint32_t.set(
+          this._getBuffer(),
+          bufUsedPtr,
+          string.set(this._getBuffer(), bufPtr, contents, bufLen)
+        );
+      },
       path_filestat_get: async (
         dirFd: fd_t,
-        flags: any,
+        lookupFlags: LookupFlags,
         pathPtr: ptr<string>,
         pathLen: number,
         filestatPtr: ptr<filestat_t>
@@ -764,7 +783,8 @@ export default class Bindings implements AsyncDisposable {
           this._getBuffer(),
           filestatPtr,
           await this._openFiles.stat(
-            this._resolve(dirFd, pathPtr, pathLen, Rights.PathFilestatGet)
+            this._resolve(dirFd, pathPtr, pathLen, Rights.PathFilestatGet),
+            lookupFlags
           )
         ),
       fd_seek: async (
@@ -819,7 +839,8 @@ export default class Bindings implements AsyncDisposable {
         if (path.endsWith('/')) {
           // If the path ends with a slash, throw an error to appease WASI.
           throw new SystemError(
-            (await this._openFiles.stat(path)).filetype === FileType.Directory
+            (await this._openFiles.stat(path, LookupFlags.None)).filetype ===
+            FileType.Directory
               ? E.ISDIR
               : E.NOTDIR
           );
@@ -909,13 +930,22 @@ export default class Bindings implements AsyncDisposable {
       },
       path_link: (
         oldDirFd: fd_t,
-        oldFlags: number,
+        oldLookupFlags: LookupFlags,
         oldPathPtr: ptr<string>,
         oldPathLen: number,
         newFd: fd_t,
         newPathPtr: ptr<string>,
         newPathLen: number
-      ) => unimplemented(),
+      ) =>
+        this._openFiles.link(
+          this._resolve(
+            oldDirFd,
+            oldPathPtr,
+            oldPathLen,
+            Rights.PathLinkSource
+          ),
+          this._resolve(newFd, newPathPtr, newPathLen, Rights.PathLinkTarget)
+        ),
       fd_datasync: (fd: fd_t) =>
         this._openFiles.getFile(fd, Rights.FdDatasync).datasync(),
       fd_sync: async (fd: fd_t) =>
@@ -949,7 +979,7 @@ export default class Bindings implements AsyncDisposable {
           .setTimes(flags, newAccessTimeNs, newModTimeNs),
       path_filestat_set_times: async (
         dirFd: fd_t,
-        lookupFlags: number,
+        lookupFlags: LookupFlags,
         pathPtr: ptr<string>,
         pathLen: number,
         newAccessTimeNs: timestamp_t,
@@ -958,6 +988,7 @@ export default class Bindings implements AsyncDisposable {
       ) =>
         this._openFiles.setTimes(
           this._resolve(dirFd, pathPtr, pathLen, Rights.PathFilestatSetTimes),
+          lookupFlags,
           flags,
           newAccessTimeNs,
           newModTimeNs

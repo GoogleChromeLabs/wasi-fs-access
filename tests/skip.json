@@ -1,16 +1,6 @@
 {
   "WASI Rust tests": {
-    "dir_fd_op_failures": "Not sure why this is failing",
-    "dangling_symlink": "Symlinks are not supported",
-    "fd_advise": "File advice is not supported",
-    "nofollow_errors": "Symlinks are not supported",
-    "path_exists": "Symlinks are not supported",
-    "path_link": "Symlinks are not supported",
-    "path_symlink_trailing_slashes": "Symlinks are not supported",
-    "readlink": "Symlinks are not supported",
-    "symlink_create": "Symlinks are not supported",
-    "symlink_filestat": "Symlinks are not supported",
-    "symlink_loop": "Symlinks are not supported"
+    "fd_advise": "File advice is not supported"
   },
   "WASI C tests": {
     "sock_shutdown-invalid_fd": "Sockets are not supported",
