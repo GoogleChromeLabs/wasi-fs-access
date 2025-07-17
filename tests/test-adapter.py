@@ -21,22 +21,22 @@ if "--version" not in args:
                 # envs.append("ERRNO_MODE_WINDOWS")
                 envs.append("NO_RENAME_DIR_TO_EMPTY_DIR")
 
-try:
-    subprocess.run(
-        [
-            "node",
-            "--experimental-wasm-jspi",
-            "--import",
-            "tsx",
-            tests_dir / "test-adapter.ts",
-            *args,
-            *(f"--env={env}=1" for env in envs)
-        ],
-        check=True,
-    )
-except:
+r = subprocess.run(
+    [
+        "node",
+        "--experimental-wasm-jspi",
+        "--import",
+        "tsx",
+        tests_dir / "test-adapter.ts",
+        *args,
+        *(f"--env={env}=1" for env in envs)
+    ]
+).returncode
+
+if r:
     # If the test fails, it keeps garbage around which results in different failures for subsequent tests. Clean it up.
     subprocess.run(
         ["git", "-C", tests_dir / "wasi-testsuite", "clean", "-dfx"], check=True
     )
-    raise
+
+exit(r)
