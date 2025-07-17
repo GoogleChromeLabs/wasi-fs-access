@@ -5,25 +5,36 @@ import platform
 
 tests_dir = Path(__file__).parent
 
-args = sys.argv[1:]
+envs = []
 
 match platform.system():
-	case "Darwin":
-		errno_mode = "ERRNO_MODE_MACOS"
-	case "Linux":
-		errno_mode = "ERRNO_MODE_UNIX"
-	case "Windows":
-		errno_mode = "ERRNO_MODE_WINDOWS"
+    case "Darwin":
+        envs.append("ERRNO_MODE_MACOS")
+    case "Linux":
+        envs.append("ERRNO_MODE_UNIX")
+    case "Windows":
+        envs.append("ERRNO_MODE_WINDOWS")
+        envs.append("NO_RENAME_DIR_TO_EMPTY_DIR")
 
-if errno_mode is not None:
-	args.append(f"--env={errno_mode}=1")
-
-# Not supported yet.
-args.append("--env=NO_FD_ALLOCATE=1")
+# Not supported.
+envs.append("NO_FD_ALLOCATE")
 
 try:
-	subprocess.run(["node", "--experimental-wasm-jspi", "--import", "tsx", tests_dir / "test-adapter.ts", *args], check=True)
+    subprocess.run(
+        [
+            "node",
+            "--experimental-wasm-jspi",
+            "--import",
+            "tsx",
+            tests_dir / "test-adapter.ts",
+            *sys.argv[1:],
+            *(f"--env={env}=1" for env in envs)
+        ],
+        check=True,
+    )
 except:
-	# If the test fails, it keeps garbage around which results in different failures for subsequent tests. Clean it up.
-	subprocess.run(["git", "-C", tests_dir / "wasi-testsuite", "clean", "-dfx"], check=True)
-	raise
+    # If the test fails, it keeps garbage around which results in different failures for subsequent tests. Clean it up.
+    subprocess.run(
+        ["git", "-C", tests_dir / "wasi-testsuite", "clean", "-dfx"], check=True
+    )
+    raise
