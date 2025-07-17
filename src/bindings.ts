@@ -574,9 +574,8 @@ export default class Bindings implements AsyncDisposable {
           rightsBase: ~(stats.filetype === FileType.Directory
             ? Rights.FdSeek
             : Rights.AllPath),
-          rightsInheriting: ~(stats.filetype === FileType.Directory
-            ? Rights.PathSymlink
-            : Rights.AllPath)
+          rightsInheriting:
+            stats.filetype === FileType.Directory ? Rights.All : ~Rights.AllPath
         });
       },
       path_create_directory: async (
