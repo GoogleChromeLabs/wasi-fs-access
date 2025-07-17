@@ -45,10 +45,7 @@ const close = promisify(fs.close);
 const fsc = fs.constants;
 
 export class OpenFile implements AsyncDisposable {
-  constructor(
-    private readonly hostFd: number,
-    public readonly fdFlags: FdFlags
-  ) {}
+  constructor(private readonly hostFd: number, public fdFlags: FdFlags) {}
 
   static async openFile(
     hostPath: string,

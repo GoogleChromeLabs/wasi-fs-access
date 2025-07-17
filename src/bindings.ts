@@ -537,7 +537,9 @@ export default class Bindings implements AsyncDisposable {
             rights_t.fromRaw(fsRightsInheriting)
           )
         ),
-      fd_fdstat_set_flags: (fd: fd_t, flags: FdFlags) => unimplemented(),
+      fd_fdstat_set_flags: (fd: fd_t, flags: FdFlags) => {
+        this._openFiles.get(fd).fdFlags = flags;
+      },
       fd_close: async (fd: fd_t) => this._openFiles.close(fd),
       fd_pread: async (
         fd: fd_t,
