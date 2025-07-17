@@ -251,6 +251,7 @@ export const enum FdFlags {
 }
 
 export enum Rights {
+  None = 0,
   FdDatasync = 1 << 0,
   FdRead = 1 << 1,
   FdSeek = 1 << 2,
@@ -417,11 +418,12 @@ export default class Bindings implements AsyncDisposable {
   private _resolve(
     dirFd: fd_t,
     pathPtr: ptr<string>,
-    pathLen: number
-  ): ResolvedPath {
+    pathLen: number,
+    needRights: Rights
+  ) {
     return this._openFiles
       .getDir(dirFd)
-      .resolve(string.get(this._getBuffer(), pathPtr, pathLen));
+      .resolve(string.get(this._getBuffer(), pathPtr, pathLen), needRights);
   }
 
   addPreOpen(hostPath: string, wasiPath: string) {
@@ -537,18 +539,55 @@ export default class Bindings implements AsyncDisposable {
         fsRightsInheriting: rights_t,
         fdFlags: FdFlags,
         fdPtr: ptr<fd_t>
-      ) =>
+      ) => {
+        let dir = this._openFiles.getDir(dirFd);
+        let path = string.get(this._getBuffer(), pathPtr, pathLen);
+
+        let neededDirRights = Rights.PathOpen;
+        if (oFlags & OpenFlags.Create) {
+          neededDirRights |= Rights.PathCreateFile;
+        }
+        if (oFlags & OpenFlags.Truncate) {
+          neededDirRights |= Rights.PathFilestatSetSize;
+        }
+
+        path = dir.resolve(path, neededDirRights);
+
+        let rights = rights_t.fromRaw(fsRightsBase);
+        // This is weeeeird step around WASI cap system IMO and I don't see it specced anywhere,
+        // but apparently expected by WASI implementations and the test suite.
+        let pathFilestatRights = dir.rights & Rights.AllPathFilestat;
+        // add all FdFilestat rights corresponding to existing PathFilestat rights
+        rights |= pathFilestatRights << 3;
+        rights &= dir.rightsInheriting;
+
+        let rightsInheriting = rights_t.fromRaw(fsRightsInheriting);
+        rightsInheriting &= dir.rightsInheriting;
+
+        let neededRights = Rights.None;
+        if (fdFlags & (FdFlags.Sync | FdFlags.RSync)) {
+          // TODO: I don't think the test is correct.
+          // neededRights |= Rights.FdSync;
+        }
+        if (fdFlags & FdFlags.DSync) {
+          neededRights |= Rights.FdDatasync;
+        }
+        if ((rights & neededRights) !== neededRights) {
+          throw new SystemError(E.NOTCAPABLE);
+        }
+
         fd_t.set(
           this._getBuffer(),
           fdPtr,
           await this._openFiles.open(
-            this._resolve(dirFd, pathPtr, pathLen),
+            path,
             oFlags,
             fdFlags,
-            rights_t.fromRaw(fsRightsBase),
-            rights_t.fromRaw(fsRightsInheriting)
+            rights,
+            rightsInheriting
           )
-        ),
+        );
+      },
       fd_fdstat_set_flags: (fd: fd_t, flags: FdFlags) => {
         this._openFiles.get(fd).fdFlags = flags;
       },
@@ -593,7 +632,10 @@ export default class Bindings implements AsyncDisposable {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => this._openFiles.createDir(this._resolve(dirFd, pathPtr, pathLen)),
+      ) =>
+        this._openFiles.createDir(
+          this._resolve(dirFd, pathPtr, pathLen, Rights.PathCreateDirectory)
+        ),
       path_rename: async (
         oldDirFd: fd_t,
         oldPathPtr: ptr<string>,
@@ -603,15 +645,30 @@ export default class Bindings implements AsyncDisposable {
         newPathLen: number
       ) =>
         this._openFiles.rename(
-          this._resolve(oldDirFd, oldPathPtr, oldPathLen),
-          this._resolve(newDirFd, newPathPtr, newPathLen)
+          this._resolve(
+            oldDirFd,
+            oldPathPtr,
+            oldPathLen,
+            Rights.PathRenameSource
+          ),
+          this._resolve(
+            newDirFd,
+            newPathPtr,
+            newPathLen,
+            Rights.PathRenameTarget
+          )
         ),
       path_remove_directory: async (
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
       ) => {
-        let path = this._resolve(dirFd, pathPtr, pathLen);
+        let path = this._resolve(
+          dirFd,
+          pathPtr,
+          pathLen,
+          Rights.PathRemoveDirectory
+        );
         try {
           await this._openFiles.rmDir(path);
         } catch (e: any) {
@@ -699,7 +756,9 @@ export default class Bindings implements AsyncDisposable {
         filestat_t.set(
           this._getBuffer(),
           filestatPtr,
-          await this._openFiles.stat(this._resolve(dirFd, pathPtr, pathLen))
+          await this._openFiles.stat(
+            this._resolve(dirFd, pathPtr, pathLen, Rights.PathFilestatGet)
+          )
         ),
       fd_seek: async (
         fd: fd_t,
@@ -744,17 +803,21 @@ export default class Bindings implements AsyncDisposable {
         pathPtr: ptr<string>,
         pathLen: number
       ) => {
-        let resolved = this._resolve(dirFd, pathPtr, pathLen);
-        if (resolved.path.endsWith('/')) {
+        let path = this._resolve(
+          dirFd,
+          pathPtr,
+          pathLen,
+          Rights.PathUnlinkFile
+        );
+        if (path.endsWith('/')) {
           // If the path ends with a slash, throw an error to appease WASI.
           throw new SystemError(
-            (await this._openFiles.stat(resolved)).filetype ===
-            FileType.Directory
+            (await this._openFiles.stat(path)).filetype === FileType.Directory
               ? E.ISDIR
               : E.NOTDIR
           );
         }
-        return this._openFiles.rmFile(resolved);
+        return this._openFiles.rmFile(path);
       },
       poll_oneoff: async (
         subscriptionsPtr: ptr<subscription_t[]>,
@@ -878,7 +941,7 @@ export default class Bindings implements AsyncDisposable {
         flags: SetTimeFlags
       ) =>
         this._openFiles.setTimes(
-          this._resolve(dirFd, pathPtr, pathLen),
+          this._resolve(dirFd, pathPtr, pathLen, Rights.PathFilestatSetTimes),
           flags,
           newAccessTimeNs,
           newModTimeNs
