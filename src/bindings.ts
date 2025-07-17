@@ -783,7 +783,7 @@ export default class Bindings implements AsyncDisposable {
                       timeout -= getTime(union.data.id);
                     }
                     // This is not completely correct, since setTimeout doesn't give the required precision for monotonic clock.
-                    await setTimeout(timeout, { signal });
+                    await setTimeout(timeout, undefined, { signal });
                     break;
                   }
                   case EventType.FdRead:
