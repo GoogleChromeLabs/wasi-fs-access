@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { BigIntStats, Dirent } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import * as fs from 'node:fs';
 import { mkdir, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises';
 import {
@@ -28,7 +28,7 @@ import {
   timestamp_t,
   dirent_t
 } from './bindings.js';
-import { resolve as resolvePath, join as joinPath } from 'node:path/posix';
+import { resolve as resolvePath } from 'node:path/posix';
 import { promisify } from 'node:util';
 
 // Note: not using fs/promises because it doesn't allow constructing file handles from raw fd, and we need some file ops for stdin/stdout/stderr.
@@ -171,7 +171,7 @@ export class OpenDirectory extends OpenFile {
       // Otherwise we could've used `withFileTypes` option in `readdir` itself.
       let stats: Pick<BigIntStats, 'ino' | 'mode'> = await stat(
         // Note: this will expose `ino` for `..` too, but I guess it's fine?
-        joinPath(this._hostPath, name),
+        resolvePath(this._hostPath, name),
         { bigint: true }
       );
       yield {
@@ -192,7 +192,7 @@ export class OpenDirectory extends OpenFile {
   }
 
   resolve(path: string) {
-    path = joinPath(this._hostPath, path);
+    path = resolvePath(this._hostPath, path);
     if (path !== this._hostPath && !path.startsWith(`${this._hostPath}/`)) {
       // Prevent access outside the given directory descriptor.
       throw new SystemError(E.NOTCAPABLE);
