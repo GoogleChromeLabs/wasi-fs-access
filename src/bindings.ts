@@ -872,7 +872,7 @@ export default class Bindings implements AsyncDisposable {
               this._checkAbort();
               return E.SUCCESS;
             } catch (err) {
-              return translateError(err);
+              return this._translateError(err);
             }
           });
         } else {
@@ -886,7 +886,7 @@ export default class Bindings implements AsyncDisposable {
               this._checkAbort();
               return E.SUCCESS;
             } catch (err) {
-              return translateError(err);
+              return this._translateError(err);
             }
           };
         }
@@ -908,6 +908,9 @@ export default class Bindings implements AsyncDisposable {
       return 0;
     } catch (err) {
       if (err instanceof ExitStatus) {
+        if (this.lastError !== undefined) {
+          console.error('Last bindings error:', this.lastError);
+        }
         return err.statusCode;
       }
       if (err instanceof WebAssembly.RuntimeError) {
@@ -926,13 +929,33 @@ export default class Bindings implements AsyncDisposable {
 
   [Symbol.asyncDispose]() {
     return this._openFiles[Symbol.asyncDispose]();
-  }
 }
 
-function translateError(err: any): E {
+  lastError: any;
+
+  private _translateError(err: any): E {
   let code;
   if (err instanceof SystemError) {
     ({ code } = err);
+    } else if (err instanceof DOMException) {
+      switch (err.name) {
+        case 'NotFoundError':
+          code = E.NOENT;
+          break;
+        case 'NotAllowedError':
+        case 'DataCloneError':
+        case 'SecurityError':
+          code = E.ACCES;
+          break;
+        case 'InvalidModificationError':
+          code = E.NOTEMPTY;
+          break;
+        case 'AbortError':
+          code = E.CANCELED;
+          break;
+      }
+    } else if (err instanceof TypeError || err instanceof RangeError) {
+      code = E.INVAL;
   } else if (typeof err.code === 'string') {
     // https://nodejs.org/api/errors.html#errorcode
     switch (err.code) {
@@ -956,35 +979,17 @@ function translateError(err: any): E {
         code = E.NOTEMPTY;
         break;
     }
-  } else if (err instanceof DOMException) {
-    switch (err.name) {
-      case 'NotFoundError':
-        code = E.NOENT;
-        break;
-      case 'NotAllowedError':
-      case 'DataCloneError':
-      case 'SecurityError':
-        code = E.ACCES;
-        break;
-      case 'InvalidModificationError':
-        code = E.NOTEMPTY;
-        break;
-      case 'AbortError':
-        code = E.CANCELED;
-        break;
-    }
-  } else if (err instanceof TypeError || err instanceof RangeError) {
-    code = E.INVAL;
   }
   if (code) {
-    // Before returning the code, log the original error details.
+      // Before returning the code, store the original error details.
     // Ignore the preopen error we expect in all apps.
     if (!(err instanceof NoPreopen)) {
-      console.warn(err);
+        this.lastError = err;
     }
     return code;
   } else {
     // Not something we can map to a WASI error code, must be a critical error.
     throw err;
+    }
   }
 }
