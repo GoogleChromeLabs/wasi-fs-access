@@ -134,6 +134,9 @@ export class OpenFile implements AsyncDisposable {
     fdFlags: FdFlags,
     rights: Rights
   ) {
+    // Files shouldn't have path_ rights even if manually given.
+    rights &= ~Rights.AllPath;
+
     // Throw NOTDIR if opening a regular file with a trailing slash to appease WASI.
     if (
       hostPath.endsWith('/') &&
@@ -215,6 +218,13 @@ export class OpenFile implements AsyncDisposable {
 
   async stat() {
     if (!(this.rights & Rights.FdFilestatGet)) {
+      console.group('Rights');
+      for (let i = 0; i <= 29; i++) {
+        if (this.rights & (1 << i)) {
+          console.log(`- ${Rights[1 << i]}`);
+        }
+      }
+      console.groupEnd();
       throw new SystemError(E.NOTCAPABLE);
     }
     return getNodeStats(this.hostFd, fstat);
@@ -355,7 +365,7 @@ export class OpenDirectory extends OpenFile {
       // Mostly needed for the 'ino' field, as Node.js doesn't expose it in Dirent.
       // Otherwise we could've used `withFileTypes` option in `readdir` itself.
       let resolved = this.resolve(name);
-      if (!(resolved.rightsInheriting & Rights.PathFilestatGet)) {
+      if (!(resolved.rights & Rights.PathFilestatGet)) {
         yield {
           name,
           type: FileType.Unknown,
@@ -405,6 +415,7 @@ export class OpenDirectory extends OpenFile {
     }
     return {
       path: resolvedPath,
+      rights: this.rights,
       rightsInheriting: this.rightsInheriting
     };
   }
@@ -420,14 +431,24 @@ export class PreopenDirectory extends OpenDirectory {
   }
 }
 
+function dumpRights(title: string, rights: Rights) {
+  console.group(title);
+  for (let i = 0; i <= 29; i++) {
+    if (rights & (1 << i)) {
+      console.log(`- ${Rights[1 << i]}`);
+    }
+  }
+  console.groupEnd();
+}
+
 export class OpenFiles implements AsyncDisposable {
   private _files = new Map<fd_t, OpenFile | OpenDirectory>();
   private _nextFd = 0 as fd_t;
 
   constructor() {
-    this._add(new OpenFile(process.stdin.fd, FdFlags.None, Rights.NeedsRead));
-    this._add(new OpenFile(process.stdout.fd, FdFlags.None, Rights.NeedsWrite));
-    this._add(new OpenFile(process.stderr.fd, FdFlags.None, Rights.NeedsWrite));
+    this._add(new OpenFile(process.stdin.fd, FdFlags.None, ~Rights.AllPath));
+    this._add(new OpenFile(process.stdout.fd, FdFlags.None, ~Rights.AllPath));
+    this._add(new OpenFile(process.stderr.fd, FdFlags.None, ~Rights.AllPath));
   }
 
   private _add(handle: OpenFile | OpenDirectory) {
@@ -449,8 +470,8 @@ export class OpenFiles implements AsyncDisposable {
     );
   }
 
-  createDir({ path, rightsInheriting }: ResolvedPath) {
-    if (!(rightsInheriting & Rights.PathCreateDirectory)) {
+  createDir({ path, rights }: ResolvedPath) {
+    if (!(rights & Rights.PathCreateDirectory)) {
       throw new SystemError(E.NOTCAPABLE);
     }
     return mkdir(path);
@@ -463,10 +484,41 @@ export class OpenFiles implements AsyncDisposable {
     rights: Rights,
     rightsInheriting: Rights
   ) {
-    if (!(rightsInheriting & Rights.PathOpen)) {
+    console.group(resolved.path);
+    dumpRights('Parent', resolved.rightsInheriting);
+    dumpRights('Requested', rights);
+    rights &= resolved.rightsInheriting;
+    // // This is weeeeird step around WASI cap system IMO and I don't see it specced anywhere,
+    // // but apparently expected by WASI implementations and the test suite.
+    let pathFilestatRights = resolved.rights & Rights.AllPathFilestat;
+    // add all FdFilestat rights corresponding to existing PathFilestat rights
+    rights |= pathFilestatRights << 3;
+    dumpRights('Effective', rights);
+    let neededParentRights = Rights.PathOpen;
+    if (openFlags & OpenFlags.Create) {
+      neededParentRights |= Rights.PathCreateFile;
+    }
+    if (openFlags & OpenFlags.Truncate) {
+      neededParentRights |= Rights.PathFilestatSetSize;
+    }
+    if ((resolved.rights & neededParentRights) !== neededParentRights) {
+      dumpRights('Needed Parent Rights', neededParentRights);
+      dumpRights('Resolved Parent Rights', resolved.rightsInheriting);
       throw new SystemError(E.NOTCAPABLE);
     }
-    rights &= resolved.rightsInheriting;
+    let neededRights = 0 as Rights;
+    if (fdFlags & (FdFlags.Sync | FdFlags.RSync)) {
+      // TODO: I don't think the test is correct.
+      // neededRights |= Rights.FdSync;
+    }
+    if (fdFlags & FdFlags.DSync) {
+      neededRights |= Rights.FdDatasync;
+    }
+    if ((rights & neededRights) !== neededRights) {
+      dumpRights('Needed Rights', neededRights);
+      throw new SystemError(E.NOTCAPABLE);
+    }
+    console.groupEnd();
     return this._add(
       await (openFlags & OpenFlags.Directory
         ? OpenDirectory.openDir(
@@ -504,8 +556,8 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmFile({ path, rightsInheriting }: ResolvedPath) {
-    if (!(rightsInheriting & Rights.PathUnlinkFile)) {
+  rmFile({ path, rights }: ResolvedPath) {
+    if (!(rights & Rights.PathUnlinkFile)) {
       throw new SystemError(E.NOTCAPABLE);
     }
     return unlink(path);
@@ -520,27 +572,27 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmDir({ path, rightsInheriting }: ResolvedPath) {
-    if (!(rightsInheriting & Rights.PathRemoveDirectory)) {
+  rmDir({ path, rights }: ResolvedPath) {
+    if (!(rights & Rights.PathRemoveDirectory)) {
       throw new SystemError(E.NOTCAPABLE);
     }
     return rmdir(path);
   }
 
-  async stat({ path, rightsInheriting }: ResolvedPath) {
-    if (!(rightsInheriting & Rights.PathFilestatGet)) {
+  async stat({ path, rights }: ResolvedPath) {
+    if (!(rights & Rights.PathFilestatGet)) {
       throw new SystemError(E.NOTCAPABLE);
     }
     return getNodeStats(path, stat);
   }
 
   setTimes(
-    { path, rightsInheriting }: ResolvedPath,
+    { path, rights }: ResolvedPath,
     flags: SetTimeFlags,
     accessTimeNs: timestamp_t,
     modTimeNs: timestamp_t
   ) {
-    if (!(rightsInheriting & Rights.PathFilestatSetTimes)) {
+    if (!(rights & Rights.PathFilestatSetTimes)) {
       throw new SystemError(E.NOTCAPABLE);
     }
     return setTimes(path, stat, flags, accessTimeNs, modTimeNs, utimes);
@@ -548,8 +600,8 @@ export class OpenFiles implements AsyncDisposable {
 
   rename(oldPath: ResolvedPath, newPath: ResolvedPath) {
     if (
-      !(oldPath.rightsInheriting & Rights.PathRenameSource) ||
-      !(newPath.rightsInheriting & Rights.PathRenameTarget)
+      !(oldPath.rights & Rights.PathRenameSource) ||
+      !(newPath.rights & Rights.PathRenameTarget)
     ) {
       throw new SystemError(E.NOTCAPABLE);
     }

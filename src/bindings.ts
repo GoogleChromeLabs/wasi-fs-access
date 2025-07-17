@@ -250,7 +250,7 @@ export const enum FdFlags {
   Sync = 1 << 4
 }
 
-export const enum Rights {
+export enum Rights {
   FdDatasync = 1 << 0,
   FdRead = 1 << 1,
   FdSeek = 1 << 2,
@@ -283,26 +283,23 @@ export const enum Rights {
   SockAccept = 1 << 29,
   // Custom collections
 
-  NeedsRead = Rights.FdRead | Rights.FdReaddir,
-  NeedsWrite = Rights.FdWrite |
-    Rights.FdDatasync |
-    Rights.FdSync |
-    Rights.FdAllocate |
-    Rights.FdFilestatSetSize,
-  AllPath = Rights.PathCreateDirectory |
-    Rights.PathCreateFile |
-    Rights.PathLinkSource |
-    Rights.PathLinkTarget |
-    Rights.PathOpen |
-    Rights.PathReadlink |
-    Rights.PathRenameSource |
-    Rights.PathRenameTarget |
-    Rights.PathFilestatGet |
-    Rights.PathFilestatSetSize |
-    Rights.PathFilestatSetTimes |
-    Rights.PathSymlink |
-    Rights.PathRemoveDirectory |
-    Rights.PathUnlinkFile,
+  NeedsRead = FdRead | FdReaddir,
+  NeedsWrite = FdWrite | FdDatasync | FdSync | FdAllocate | FdFilestatSetSize,
+  AllPathFilestat = PathFilestatGet |
+    PathFilestatSetSize |
+    PathFilestatSetTimes,
+  AllPath = PathCreateDirectory |
+    PathCreateFile |
+    PathLinkSource |
+    PathLinkTarget |
+    PathOpen |
+    PathReadlink |
+    PathRenameSource |
+    PathRenameTarget |
+    AllPathFilestat |
+    PathSymlink |
+    PathRemoveDirectory |
+    PathUnlinkFile,
   All = -1 // All rights, used for rightsInheriting
 }
 
@@ -373,6 +370,7 @@ function getTime(id: ClockId) {
 
 export interface ResolvedPath {
   path: string;
+  rights: Rights;
   rightsInheriting: Rights;
 }
 
@@ -587,11 +585,8 @@ export default class Bindings implements AsyncDisposable {
         fdstat_t.set(this._getBuffer(), fdstatPtr, {
           filetype: stats.filetype,
           flags: file.fdFlags,
-          rightsBase: ~(stats.filetype === FileType.Directory
-            ? Rights.FdSeek
-            : Rights.AllPath),
-          rightsInheriting:
-            stats.filetype === FileType.Directory ? Rights.All : ~Rights.AllPath
+          rightsBase: file.rights,
+          rightsInheriting: file.rightsInheriting
         });
       },
       path_create_directory: async (
@@ -951,10 +946,10 @@ export default class Bindings implements AsyncDisposable {
       await WebAssembly.promising(exports._start as () => void)();
       return 0;
     } catch (err) {
+      if (this.lastError !== undefined) {
+        console.error('Last bindings error:', this.lastError);
+      }
       if (err instanceof ExitStatus) {
-        if (this.lastError !== undefined) {
-          console.error('Last bindings error:', this.lastError);
-        }
         return err.statusCode;
       }
       if (err instanceof WebAssembly.RuntimeError) {
