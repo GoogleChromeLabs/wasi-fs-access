@@ -164,16 +164,23 @@ export class OpenDirectory extends OpenFile {
 
   private _entries?: Promise<DirentInfo[]>;
 
-  private async *_readDirents() {
-    let names = ['.', '..', ...(await readdir(this._hostPath))];
-    for (const name of names) {
+  private async *_readDirents(): AsyncIterable<DirentInfo> {
+    yield {
+      name: '.',
+      type: FileType.Directory,
+      ino: (await this.stat()).ino
+    };
+    yield {
+      name: '..',
+      type: FileType.Directory,
+      // We don't have rights to invoke sysops on the parent directory
+      // by definition, so yield it manually with `ino: 0`.
+      ino: 0n
+    };
+    for (const name of await readdir(this._hostPath)) {
       // Mostly needed for the 'ino' field, as Node.js doesn't expose it in Dirent.
       // Otherwise we could've used `withFileTypes` option in `readdir` itself.
-      let stats: Pick<BigIntStats, 'ino' | 'mode'> = await stat(
-        // Note: this will expose `ino` for `..` too, but I guess it's fine?
-        resolvePath(this._hostPath, name),
-        { bigint: true }
-      );
+      let stats = await stat(this.resolve(name), { bigint: true });
       yield {
         name,
         type: getFileType(stats),
