@@ -15,6 +15,7 @@
 import type { BigIntStats } from 'node:fs';
 import * as fs from 'node:fs';
 import {
+  link,
   lstat,
   mkdir,
   readdir,
@@ -496,6 +497,10 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   link(src: string, dst: string) {
+    return link(src, dst);
+  }
+
+  symLink(src: string, dst: string) {
     return symlink(src, dst);
   }
 
