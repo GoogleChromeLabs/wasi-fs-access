@@ -56,6 +56,16 @@ export class OpenFile implements AsyncDisposable {
     fdFlags: FdFlags,
     rights: Rights
   ) {
+    // Throw NOTDIR if opening a regular file with a trailing slash to appease WASI.
+    if (
+      hostPath.endsWith('/') &&
+      // this one could be skipped, it's an optimisation to skip stat() if we're opening as a directory anyway
+      !(openFlags & OpenFlags.Directory) &&
+      !(await stat(hostPath)).isDirectory()
+    ) {
+      throw new SystemError(E.NOTDIR);
+    }
+
     let nodeFlags = 0;
 
     if (openFlags & OpenFlags.Create) {
