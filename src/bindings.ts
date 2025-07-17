@@ -600,7 +600,22 @@ export default class Bindings implements AsyncDisposable {
         dirFd: fd_t,
         pathPtr: ptr<string>,
         pathLen: number
-      ) => this._openFiles.rmDir(this._resolve(dirFd, pathPtr, pathLen)),
+      ) => {
+        let path = this._resolve(dirFd, pathPtr, pathLen);
+        try {
+          await this._openFiles.rmDir(path);
+        } catch (e: any) {
+          if (process.platform === 'win32' && e.code === 'ENOENT') {
+            // Fixup for https://github.com/nodejs/node/issues/18014.
+            // Try to stat the path to see if it actually exists.
+            // If this fails, it will fail with ENOENT again, which is fine, but
+            // if it doesn't, it means we should throw E.NOTDIR instead.
+            await this._openFiles.stat(path);
+            throw new SystemError(E.NOTDIR);
+          }
+          throw e;
+        }
+      },
       fd_readdir: async (
         fd: fd_t,
         bufPtr: ptr<dirent_t | string>,
