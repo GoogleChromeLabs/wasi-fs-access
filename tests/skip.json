@@ -3,8 +3,6 @@
     "dir_fd_op_failures": "Not sure why this is failing",
     "dangling_symlink": "Symlinks are not supported",
     "fd_advise": "File advice is not supported",
-    "fd_fdstat_set_rights": "Rights manipulation is not supported",
-    "truncation_rights": "Rights manipulation is not supported",
     "nofollow_errors": "Symlinks are not supported",
     "path_exists": "Symlinks are not supported",
     "path_link": "Symlinks are not supported",

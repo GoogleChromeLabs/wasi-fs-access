@@ -371,6 +371,11 @@ function getTime(id: ClockId) {
   }
 }
 
+export interface ResolvedPath {
+  path: string;
+  rightsInheriting: Rights;
+}
+
 export default class Bindings implements AsyncDisposable {
   private readonly _openFiles = new OpenFiles();
 
@@ -411,7 +416,11 @@ export default class Bindings implements AsyncDisposable {
     return memory.buffer;
   }
 
-  private _resolve(dirFd: fd_t, pathPtr: ptr<string>, pathLen: number) {
+  private _resolve(
+    dirFd: fd_t,
+    pathPtr: ptr<string>,
+    pathLen: number
+  ): ResolvedPath {
     return this._openFiles
       .getDir(dirFd)
       .resolve(string.get(this._getBuffer(), pathPtr, pathLen));
@@ -740,16 +749,17 @@ export default class Bindings implements AsyncDisposable {
         pathPtr: ptr<string>,
         pathLen: number
       ) => {
-        let path = this._resolve(dirFd, pathPtr, pathLen);
-        if (path.endsWith('/')) {
+        let resolved = this._resolve(dirFd, pathPtr, pathLen);
+        if (resolved.path.endsWith('/')) {
           // If the path ends with a slash, throw an error to appease WASI.
           throw new SystemError(
-            (await this._openFiles.stat(path)).filetype === FileType.Directory
+            (await this._openFiles.stat(resolved)).filetype ===
+            FileType.Directory
               ? E.ISDIR
               : E.NOTDIR
           );
         }
-        return this._openFiles.rmFile(path);
+        return this._openFiles.rmFile(resolved);
       },
       poll_oneoff: async (
         subscriptionsPtr: ptr<subscription_t[]>,
@@ -880,9 +890,13 @@ export default class Bindings implements AsyncDisposable {
         ),
       fd_fdstat_set_rights: (
         fd: fd_t,
-        rightsBase: bigint,
-        rightsInheriting: bigint
-      ) => unimplemented()
+        rightsBase: rights_t,
+        rightsInheriting: rights_t
+      ) => {
+        let file = this._openFiles.get(fd);
+        file.rights &= rights_t.fromRaw(rightsBase);
+        file.rightsInheriting &= rights_t.fromRaw(rightsInheriting);
+      }
     };
 
     // AsyncFunction is not exposed in the global scope, so we need to get it manually.
@@ -959,14 +973,14 @@ export default class Bindings implements AsyncDisposable {
 
   [Symbol.asyncDispose]() {
     return this._openFiles[Symbol.asyncDispose]();
-}
+  }
 
   lastError: any;
 
   private _translateError(err: any): E {
-  let code;
-  if (err instanceof SystemError) {
-    ({ code } = err);
+    let code;
+    if (err instanceof SystemError) {
+      ({ code } = err);
     } else if (err instanceof DOMException) {
       switch (err.name) {
         case 'NotFoundError':
@@ -986,40 +1000,40 @@ export default class Bindings implements AsyncDisposable {
       }
     } else if (err instanceof TypeError || err instanceof RangeError) {
       code = E.INVAL;
-  } else if (typeof err.code === 'string') {
-    // https://nodejs.org/api/errors.html#errorcode
-    switch (err.code) {
-      case 'EACCES':
-      case 'EPERM':
-        code = E.ACCES;
-        break;
-      case 'EEXIST':
-        code = E.EXIST;
-        break;
-      case 'EISDIR':
-        code = E.ISDIR;
-        break;
-      case 'ENOENT':
-        code = E.NOENT;
-        break;
-      case 'ENOTDIR':
-        code = E.NOTDIR;
-        break;
-      case 'ENOTEMPTY':
-        code = E.NOTEMPTY;
-        break;
+    } else if (typeof err.code === 'string') {
+      // https://nodejs.org/api/errors.html#errorcode
+      switch (err.code) {
+        case 'EACCES':
+        case 'EPERM':
+          code = E.ACCES;
+          break;
+        case 'EEXIST':
+          code = E.EXIST;
+          break;
+        case 'EISDIR':
+          code = E.ISDIR;
+          break;
+        case 'ENOENT':
+          code = E.NOENT;
+          break;
+        case 'ENOTDIR':
+          code = E.NOTDIR;
+          break;
+        case 'ENOTEMPTY':
+          code = E.NOTEMPTY;
+          break;
+      }
     }
-  }
-  if (code) {
+    if (code) {
       // Before returning the code, store the original error details.
-    // Ignore the preopen error we expect in all apps.
-    if (!(err instanceof NoPreopen)) {
+      // Ignore the preopen error we expect in all apps.
+      if (!(err instanceof NoPreopen)) {
         this.lastError = err;
-    }
-    return code;
-  } else {
-    // Not something we can map to a WASI error code, must be a critical error.
-    throw err;
+      }
+      return code;
+    } else {
+      // Not something we can map to a WASI error code, must be a critical error.
+      throw err;
     }
   }
 }
