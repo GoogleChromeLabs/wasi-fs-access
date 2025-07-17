@@ -5,19 +5,21 @@ import platform
 
 tests_dir = Path(__file__).parent
 
+args = sys.argv[1:]
 envs = []
 
-match platform.system():
-    case "Darwin":
-        envs.append("ERRNO_MODE_MACOS")
-    case "Linux":
-        envs.append("ERRNO_MODE_UNIX")
-    case "Windows":
-        envs.append("ERRNO_MODE_WINDOWS")
-        envs.append("NO_RENAME_DIR_TO_EMPTY_DIR")
-
-# Not supported.
-envs.append("NO_FD_ALLOCATE")
+if "--version" not in args:
+    test_file_index = args.index("--test-file") + 1
+    test_file_path = Path(args[test_file_index])
+    if "rust" in test_file_path.parts:
+        # Not supported.
+        envs.append("NO_FD_ALLOCATE")
+        match platform.system():
+            case "Linux":
+                envs.append("ERRNO_MODE_UNIX")
+            case "Windows":
+                # envs.append("ERRNO_MODE_WINDOWS")
+                envs.append("NO_RENAME_DIR_TO_EMPTY_DIR")
 
 try:
     subprocess.run(
@@ -27,7 +29,7 @@ try:
             "--import",
             "tsx",
             tests_dir / "test-adapter.ts",
-            *sys.argv[1:],
+            *args,
             *(f"--env={env}=1" for env in envs)
         ],
         check=True,
