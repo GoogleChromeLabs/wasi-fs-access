@@ -101,28 +101,15 @@ export class OpenFile implements AsyncDisposable {
   constructor(
     private readonly hostFd: number,
     public fdFlags: FdFlags,
-    private _rights: Rights
+    public rights: Rights
   ) {}
 
-  get rights() {
-    return this._rights;
-  }
+  // Files can't have inheriting rights.
+  rightsInheriting = Rights.None;
 
-  set rights(value: Rights) {
-    if (value & ~this._rights) {
-      // Attempting to extend rights is not allowed.
-      throw new SystemError(E.NOTCAPABLE);
-    }
-    this._rights = value;
-  }
-
-  get rightsInheriting() {
-    return Rights.None;
-  }
-
-  set rightsInheriting(value) {
-    if (value) {
-      // Attempting to add any rights inheriting is not allowed for files.
+  checkRights(needRights: Rights) {
+    if ((this.rights & needRights) !== needRights) {
+      // If the rights are not enough, throw an error.
       throw new SystemError(E.NOTCAPABLE);
     }
   }
@@ -183,9 +170,6 @@ export class OpenFile implements AsyncDisposable {
   private _position: number = 0;
 
   get position() {
-    if (!(this.rights & Rights.FdTell)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     return this._position;
   }
 
@@ -193,60 +177,32 @@ export class OpenFile implements AsyncDisposable {
     if (value < 0) {
       throw new RangeError('Position cannot be negative');
     }
-    if (!(this.rights & Rights.FdSeek)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     this._position = value;
   }
 
   async readvAt(bufs: Uint8Array[], position: number): Promise<number> {
-    if (!(this.rights & Rights.FdRead)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     const { bytesRead } = await readv(this.hostFd, bufs, position);
     return bytesRead;
   }
 
   async writevAt(bufs: Uint8Array[], position: number): Promise<number> {
-    if (!(this.rights & Rights.FdWrite)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     const { bytesWritten } = await writev(this.hostFd, bufs, position);
     return bytesWritten;
   }
 
   async stat() {
-    if (!(this.rights & Rights.FdFilestatGet)) {
-      console.group('Rights');
-      for (let i = 0; i <= 29; i++) {
-        if (this.rights & (1 << i)) {
-          console.log(`- ${Rights[1 << i]}`);
-        }
-      }
-      console.groupEnd();
-      throw new SystemError(E.NOTCAPABLE);
-    }
     return getNodeStats(this.hostFd, fstat);
   }
 
   datasync() {
-    if (!(this.rights & Rights.FdDatasync)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     return fdatasync(this.hostFd);
   }
 
   sync() {
-    if (!(this.rights & Rights.FdSync)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     return fsync(this.hostFd);
   }
 
   setSize(size: number) {
-    if (!(this.rights & Rights.FdFilestatSetSize)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     return fruncate(this.hostFd, size);
   }
 
@@ -255,9 +211,6 @@ export class OpenFile implements AsyncDisposable {
     newAccessTime: timestamp_t,
     newModTime: timestamp_t
   ) {
-    if (!(this.rights & Rights.FdFilestatSetTimes)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     return setTimes(
       this.hostFd,
       fstat,
@@ -311,21 +264,9 @@ export class OpenDirectory extends OpenFile {
     private readonly _hostPath: string,
     hostFd: number,
     rights: Rights,
-    private _rightsInheriting: Rights
+    public rightsInheriting: Rights
   ) {
     super(hostFd, FdFlags.None, rights);
-  }
-
-  get rightsInheriting() {
-    return this._rightsInheriting;
-  }
-
-  set rightsInheriting(value: Rights) {
-    if (value & ~this._rightsInheriting) {
-      // Attempting to extend rights is not allowed.
-      throw new SystemError(E.NOTCAPABLE);
-    }
-    this._rightsInheriting = value;
   }
 
   static async openDir(
@@ -351,7 +292,7 @@ export class OpenDirectory extends OpenFile {
     yield {
       name: '.',
       type: FileType.Directory,
-      ino: (await this.stat()).ino
+      ino: this.rights & Rights.FdFilestatGet ? (await this.stat()).ino : 0n
     };
     yield {
       name: '..',
@@ -360,22 +301,29 @@ export class OpenDirectory extends OpenFile {
       // by definition, so yield it manually with `ino: 0`.
       ino: 0n
     };
+    const canStat = this.rights & Rights.PathFilestatGet;
     for (const name of await readdir(this._hostPath)) {
-      let stats = await stat(this.resolve(name, Rights.FdFilestatGet), {
-        bigint: true
-      });
-      yield {
-        name,
-        type: getFileType(stats),
-        ino: stats.ino
-      };
+      if (!canStat) {
+        // We don't have rights to stat, so only report the name.
+        yield {
+          name,
+          type: FileType.Unknown,
+          ino: 0n
+        };
+      } else {
+        let stats = await stat(this.resolve(name), {
+          bigint: true
+        });
+        yield {
+          name,
+          type: getFileType(stats),
+          ino: stats.ino
+        };
+      }
     }
   }
 
   async *getEntries(start = 0) {
-    if (!(this.rights & Rights.FdReaddir)) {
-      throw new SystemError(E.NOTCAPABLE);
-    }
     // If we are starting from the beginning, refresh the entries as the directory might have changed.
     // Otherwise, continue from the same snapshot.
     if (start === 0 || !this._entries) {
@@ -389,11 +337,7 @@ export class OpenDirectory extends OpenFile {
     }
   }
 
-  resolve(path: string, needRights: Rights) {
-    if ((this.rights & needRights) !== needRights) {
-      // If the rights are not enough, throw an error.
-      throw new SystemError(E.NOTCAPABLE);
-    }
+  resolve(path: string) {
     let resolvedPath = resolvePath(this._hostPath, path);
     // WASI cares about trailing slash in some places, but Node's `resolve` removes it.
     // Add it back manually.
@@ -464,25 +408,27 @@ export class OpenFiles implements AsyncDisposable {
     return mkdir(path);
   }
 
-  async open(
+  async openFile(
     path: string,
     openFlags: OpenFlags,
     fdFlags: FdFlags,
-    rights: Rights,
-    rightsInheriting: Rights
+    rights: Rights
   ) {
+    return this._add(await OpenFile.openFile(path, openFlags, fdFlags, rights));
+  }
+
+  async openDir(path: string, rights: Rights, rightsInheriting: Rights) {
     return this._add(
-      await (openFlags & OpenFlags.Directory
-        ? OpenDirectory.openDir(path, rights, rightsInheriting)
-        : OpenFile.openFile(path, openFlags, fdFlags, rights))
+      await OpenDirectory.openDir(path, rights, rightsInheriting)
     );
   }
 
-  get(fd: fd_t) {
+  get(fd: fd_t, neededRights: Rights) {
     const file = this._files.get(fd);
     if (!file) {
       throw new SystemError(E.BADF);
     }
+    file.checkRights(neededRights);
     return file;
   }
 
@@ -495,8 +441,8 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  getFile(fd: fd_t): OpenFile {
-    let openFile = this.get(fd);
+  getFile(fd: fd_t, neededRights: Rights): OpenFile {
+    let openFile = this.get(fd, neededRights);
     if (openFile instanceof OpenFile) {
       return openFile;
     } else {
@@ -508,8 +454,8 @@ export class OpenFiles implements AsyncDisposable {
     return unlink(path);
   }
 
-  getDir(fd: fd_t): OpenDirectory {
-    let openFile = this.get(fd);
+  getDir(fd: fd_t, neededRights: Rights): OpenDirectory {
+    let openFile = this.get(fd, neededRights);
     if (openFile instanceof OpenDirectory) {
       return openFile;
     } else {
@@ -539,7 +485,7 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   private _take(fd: fd_t) {
-    let handle = this.get(fd);
+    let handle = this.get(fd, Rights.None);
     this._files.delete(fd);
     return handle;
   }

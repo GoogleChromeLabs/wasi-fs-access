@@ -419,11 +419,11 @@ export default class Bindings implements AsyncDisposable {
     dirFd: fd_t,
     pathPtr: ptr<string>,
     pathLen: number,
-    needRights: Rights
+    needDirRights: Rights
   ) {
     return this._openFiles
-      .getDir(dirFd)
-      .resolve(string.get(this._getBuffer(), pathPtr, pathLen), needRights);
+      .getDir(dirFd, needDirRights)
+      .resolve(string.get(this._getBuffer(), pathPtr, pathLen));
   }
 
   addPreOpen(hostPath: string, wasiPath: string) {
@@ -432,6 +432,7 @@ export default class Bindings implements AsyncDisposable {
 
   async _fileIO(
     fd: fd_t,
+    rights: Rights,
     iovsPtr: ptr<iovec_t>,
     iovsLen: number,
     nprocessedBytesPtr: ptr<number>,
@@ -444,7 +445,7 @@ export default class Bindings implements AsyncDisposable {
       i *= 2;
       return new Uint8Array(buffer, iovsRaw[i], iovsRaw[i + 1]);
     });
-    let file = this._openFiles.getFile(fd);
+    let file = this._openFiles.getFile(fd, rights);
     let nprocessedBytes = await io(
       file,
       iovecs,
@@ -465,6 +466,7 @@ export default class Bindings implements AsyncDisposable {
   ): void | PromiseLike<void> {
     return this._fileIO(
       fd,
+      Rights.FdRead,
       iovsPtr,
       iovsLen,
       nreadPtr,
@@ -482,6 +484,7 @@ export default class Bindings implements AsyncDisposable {
   ): void | PromiseLike<void> {
     return this._fileIO(
       fd,
+      Rights.FdWrite,
       iovsPtr,
       iovsLen,
       nwrittenPtr,
@@ -540,9 +543,6 @@ export default class Bindings implements AsyncDisposable {
         fdFlags: FdFlags,
         fdPtr: ptr<fd_t>
       ) => {
-        let dir = this._openFiles.getDir(dirFd);
-        let path = string.get(this._getBuffer(), pathPtr, pathLen);
-
         let neededDirRights = Rights.PathOpen;
         if (oFlags & OpenFlags.Create) {
           neededDirRights |= Rights.PathCreateFile;
@@ -550,19 +550,22 @@ export default class Bindings implements AsyncDisposable {
         if (oFlags & OpenFlags.Truncate) {
           neededDirRights |= Rights.PathFilestatSetSize;
         }
-
-        path = dir.resolve(path, neededDirRights);
+        let dir = this._openFiles.getDir(dirFd, neededDirRights);
+        let path = dir.resolve(string.get(this._getBuffer(), pathPtr, pathLen));
 
         let rights = rights_t.fromRaw(fsRightsBase);
         // This is weeeeird step around WASI cap system IMO and I don't see it specced anywhere,
         // but apparently expected by WASI implementations and the test suite.
-        let pathFilestatRights = dir.rights & Rights.AllPathFilestat;
-        // add all FdFilestat rights corresponding to existing PathFilestat rights
-        rights |= pathFilestatRights << 3;
+        let filestatRights = dir.rights & Rights.AllPathFilestat;
+        // turn all path filestat rights into fd filestat rights
+        filestatRights <<= 3;
+        // ...unless it's a directory, which can't have set_size right
+        if (oFlags & OpenFlags.Directory) {
+          filestatRights &= ~Rights.FdFilestatSetSize;
+        }
+        // add those fd rights to the explicitly provided ones
+        rights |= filestatRights;
         rights &= dir.rightsInheriting;
-
-        let rightsInheriting = rights_t.fromRaw(fsRightsInheriting);
-        rightsInheriting &= dir.rightsInheriting;
 
         let neededRights = Rights.None;
         if (fdFlags & (FdFlags.Sync | FdFlags.RSync)) {
@@ -576,20 +579,24 @@ export default class Bindings implements AsyncDisposable {
           throw new SystemError(E.NOTCAPABLE);
         }
 
-        fd_t.set(
-          this._getBuffer(),
-          fdPtr,
-          await this._openFiles.open(
-            path,
-            oFlags,
-            fdFlags,
-            rights,
-            rightsInheriting
-          )
-        );
+        let fd;
+        if (oFlags & OpenFlags.Directory) {
+          if (oFlags !== OpenFlags.Directory) {
+            throw new RangeError(
+              'OpenFlags.Directory must be the only flag set'
+            );
+          }
+          let rightsInheriting = rights_t.fromRaw(fsRightsInheriting);
+          rightsInheriting &= dir.rightsInheriting;
+          fd = await this._openFiles.openDir(path, rights, rightsInheriting);
+        } else {
+          fd = await this._openFiles.openFile(path, oFlags, fdFlags, rights);
+        }
+
+        fd_t.set(this._getBuffer(), fdPtr, fd);
       },
       fd_fdstat_set_flags: (fd: fd_t, flags: FdFlags) => {
-        this._openFiles.get(fd).fdFlags = flags;
+        this._openFiles.get(fd, Rights.FdFdstatSetFlags).fdFlags = flags;
       },
       fd_close: async (fd: fd_t) => this._openFiles.close(fd),
       fd_pread: async (
@@ -619,7 +626,7 @@ export default class Bindings implements AsyncDisposable {
         nwrittenPtr: ptr<number>
       ) => this._fileWrite(fd, iovsPtr, iovsLen, nwrittenPtr),
       fd_fdstat_get: async (fd: fd_t, fdstatPtr: ptr<fdstat_t>) => {
-        let file = this._openFiles.get(fd);
+        let file = this._openFiles.get(fd, Rights.FdFilestatGet);
         let stats = await file.stat();
         fdstat_t.set(this._getBuffer(), fdstatPtr, {
           filetype: stats.filetype,
@@ -691,7 +698,7 @@ export default class Bindings implements AsyncDisposable {
         bufUsedPtr: ptr<number>
       ) => {
         const initialBufPtr = bufPtr;
-        let openDir = this._openFiles.getDir(fd);
+        let openDir = this._openFiles.getDir(fd, Rights.FdReaddir);
         let buf = this._getBuffer();
         for await (let entry of openDir.getEntries(Number(next))) {
           this._checkAbort();
@@ -766,7 +773,7 @@ export default class Bindings implements AsyncDisposable {
         whence: Whence,
         filesizePtr: ptr<bigint>
       ) => {
-        let openFile = this._openFiles.getFile(fd);
+        let openFile = this._openFiles.getFile(fd, Rights.FdSeek);
         let pos: number;
         switch (whence) {
           case Whence.Current:
@@ -790,13 +797,13 @@ export default class Bindings implements AsyncDisposable {
         uint64_t.set(
           this._getBuffer(),
           offsetPtr,
-          BigInt(this._openFiles.getFile(fd).position)
+          BigInt(this._openFiles.getFile(fd, Rights.FdTell).position)
         ),
       fd_filestat_get: async (fd: fd_t, filestatPtr: ptr<filestat_t>) =>
         filestat_t.set(
           this._getBuffer(),
           filestatPtr,
-          await this._openFiles.get(fd).stat()
+          await this._openFiles.get(fd, Rights.FdFilestatGet).stat()
         ),
       path_unlink_file: async (
         dirFd: fd_t,
@@ -865,9 +872,14 @@ export default class Bindings implements AsyncDisposable {
                   case EventType.FdWrite: {
                     let { fd } = union.data;
                     // Just verify that the file descriptor is valid.
-                    this._openFiles.getFile(fd);
+                    // TODO: actually wait for stdin to be ready.
                     // Other than that, even WASI spec says it should resolve immediately for regular files.
-                    // I guess it's merely here for future-proofing.
+                    this._openFiles.getFile(
+                      fd,
+                      union.tag === EventType.FdRead
+                        ? Rights.FdRead
+                        : Rights.FdWrite
+                    );
                     break;
                   }
                   default:
@@ -904,10 +916,14 @@ export default class Bindings implements AsyncDisposable {
         newPathPtr: ptr<string>,
         newPathLen: number
       ) => unimplemented(),
-      fd_datasync: (fd: fd_t) => this._openFiles.getFile(fd).datasync(),
-      fd_sync: async (fd: fd_t) => this._openFiles.getFile(fd).sync(),
+      fd_datasync: (fd: fd_t) =>
+        this._openFiles.getFile(fd, Rights.FdDatasync).datasync(),
+      fd_sync: async (fd: fd_t) =>
+        this._openFiles.getFile(fd, Rights.FdSync).sync(),
       fd_filestat_set_size: async (fd: fd_t, newSize: bigint) =>
-        this._openFiles.getFile(fd).setSize(Number(newSize)),
+        this._openFiles
+          .getFile(fd, Rights.FdFilestatSetSize)
+          .setSize(Number(newSize)),
       fd_renumber: async (from: fd_t, to: fd_t) =>
         this._openFiles.renumber(from, to),
       path_symlink: (oldPath: ptr<string>, fd: fd_t, newPath: ptr<string>) =>
@@ -929,7 +945,7 @@ export default class Bindings implements AsyncDisposable {
         flags: SetTimeFlags
       ) =>
         this._openFiles
-          .getFile(fd)
+          .getFile(fd, Rights.FdFilestatSetTimes)
           .setTimes(flags, newAccessTimeNs, newModTimeNs),
       path_filestat_set_times: async (
         dirFd: fd_t,
@@ -948,12 +964,20 @@ export default class Bindings implements AsyncDisposable {
         ),
       fd_fdstat_set_rights: (
         fd: fd_t,
-        rightsBase: rights_t,
-        rightsInheriting: rights_t
+        rightsBaseRaw: rights_t,
+        rightsInheritingRaw: rights_t
       ) => {
-        let file = this._openFiles.get(fd);
-        file.rights &= rights_t.fromRaw(rightsBase);
-        file.rightsInheriting &= rights_t.fromRaw(rightsInheriting);
+        let rights = rights_t.fromRaw(rightsBaseRaw);
+        // Request `rights` to be already present to make sure we don't allow elevation.
+        let file = this._openFiles.get(fd, rights);
+        file.rights = rights;
+
+        let rightsInheriting = rights_t.fromRaw(rightsInheritingRaw);
+        if ((file.rightsInheriting & rightsInheriting) !== rightsInheriting) {
+          // Don't allow inheriting rights elevation either.
+          throw new SystemError(E.NOTCAPABLE);
+        }
+        file.rightsInheriting = rightsInheriting;
       }
     };
 
@@ -1023,10 +1047,6 @@ export default class Bindings implements AsyncDisposable {
       // Anything else is an unexpected error, likely in the implementation.
       throw err;
     }
-  }
-
-  _getForTesting(fd: fd_t) {
-    return this._openFiles.get(fd);
   }
 
   [Symbol.asyncDispose]() {
