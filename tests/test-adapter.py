@@ -25,5 +25,5 @@ try:
 	subprocess.run(["node", "--experimental-wasm-jspi", "--import", "tsx", tests_dir / "test-adapter.ts", *args], check=True)
 except:
 	# If the test fails, it keeps garbage around which results in different failures for subsequent tests. Clean it up.
-	subprocess.run(["git", "-C", tests_dir / "wasi-testsuite", "clean", "-df"], check=True)
+	subprocess.run(["git", "-C", tests_dir / "wasi-testsuite", "clean", "-dfx"], check=True)
 	raise
