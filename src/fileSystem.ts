@@ -42,8 +42,12 @@ import {
   SetTimeFlags,
   LookupFlags
 } from './bindings.js';
-import { resolve as resolvePath } from 'node:path/posix';
+import { resolve as resolvePath_ } from 'node:path/posix';
 import { promisify } from 'node:util';
+
+type ResolvedPath = string & { __resolved: true };
+
+const resolvePath = resolvePath_ as (...paths: string[]) => ResolvedPath;
 
 // Note: not using fs/promises because it doesn't allow constructing file handles from raw fd, and we need some file ops for stdin/stdout/stderr.
 const open = promisify(fs.open);
@@ -120,7 +124,7 @@ export class OpenFile implements AsyncDisposable {
   }
 
   static async openFile(
-    hostPath: string,
+    hostPath: ResolvedPath,
     openFlags: OpenFlags,
     fdFlags: FdFlags,
     rights: Rights
@@ -266,7 +270,7 @@ function cachingIterable<T>(iter: AsyncIterable<T>): AsyncIterable<T> {
 
 export class OpenDirectory extends OpenFile {
   constructor(
-    private readonly _hostPath: string,
+    private readonly _hostPath: ResolvedPath,
     hostFd: number,
     rights: Rights,
     public rightsInheriting: Rights
@@ -275,7 +279,7 @@ export class OpenDirectory extends OpenFile {
   }
 
   static async openDir(
-    hostPath: string,
+    hostPath: ResolvedPath,
     rights: Rights,
     rightsInheriting: Rights
   ) {
@@ -344,17 +348,17 @@ export class OpenDirectory extends OpenFile {
 
   resolve(path: string) {
     let resolvedPath = resolvePath(this._hostPath, path);
-    // WASI cares about trailing slash in some places, but Node's `resolve` removes it.
-    // Add it back manually.
-    if (path.endsWith('/')) {
-      resolvedPath += '/';
-    }
     if (
       !resolvedPath.startsWith(`${this._hostPath}/`) &&
       resolvedPath !== this._hostPath
     ) {
       // Prevent access outside the given directory descriptor.
       throw new SystemError(E.NOTCAPABLE);
+    }
+    // WASI cares about trailing slash in some places, but Node's `resolve` removes it.
+    // Add it back manually.
+    if (path.endsWith('/')) {
+      resolvedPath = (resolvedPath + '/') as ResolvedPath;
     }
     return resolvedPath;
   }
@@ -363,7 +367,7 @@ export class OpenDirectory extends OpenFile {
 export class PreopenDirectory extends OpenDirectory {
   constructor(
     public readonly wasiPath: string,
-    hostPath: string,
+    hostPath: ResolvedPath,
     hostFd: number
   ) {
     super(hostPath, hostFd, Rights.All, Rights.All);
@@ -396,25 +400,23 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   public async addPreOpen(wasiPath: string, hostPath: string) {
-    // We'll be judging "did this thing resolve outside the preopen directory" by checking if the resolved path starts with the preopen path.
-    // In order to do that, we need to store a fully resolved path.
-    hostPath = resolvePath(hostPath);
-
     this._add(
       new PreopenDirectory(
         wasiPath,
-        hostPath,
+        // We'll be judging "did this thing resolve outside the preopen directory" by checking if the resolved path starts with the preopen path.
+        // In order to do that, we need to store a fully resolved path.
+        resolvePath(hostPath),
         await open(hostPath, fsc.O_DIRECTORY)
       )
     );
   }
 
-  createDir(path: string) {
+  createDir(path: ResolvedPath) {
     return mkdir(path);
   }
 
   async openFile(
-    path: string,
+    path: ResolvedPath,
     openFlags: OpenFlags,
     fdFlags: FdFlags,
     rights: Rights
@@ -422,7 +424,7 @@ export class OpenFiles implements AsyncDisposable {
     return this._add(await OpenFile.openFile(path, openFlags, fdFlags, rights));
   }
 
-  async openDir(path: string, rights: Rights, rightsInheriting: Rights) {
+  async openDir(path: ResolvedPath, rights: Rights, rightsInheriting: Rights) {
     return this._add(
       await OpenDirectory.openDir(path, rights, rightsInheriting)
     );
@@ -455,7 +457,7 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmFile(path: string) {
+  rmFile(path: ResolvedPath) {
     return unlink(path);
   }
 
@@ -468,11 +470,11 @@ export class OpenFiles implements AsyncDisposable {
     }
   }
 
-  rmDir(path: string) {
+  rmDir(path: ResolvedPath) {
     return rmdir(path);
   }
 
-  async stat(path: string, lookupFlags: LookupFlags) {
+  async stat(path: ResolvedPath, lookupFlags: LookupFlags) {
     return getNodeStats(
       path,
       lookupFlags & LookupFlags.FollowSymlinks ? stat : lstat
@@ -480,7 +482,7 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   setTimes(
-    path: string,
+    path: ResolvedPath,
     lookupFlags: LookupFlags,
     flags: SetTimeFlags,
     accessTimeNs: timestamp_t,
@@ -496,19 +498,19 @@ export class OpenFiles implements AsyncDisposable {
     );
   }
 
-  link(src: string, dst: string) {
+  link(src: ResolvedPath, dst: ResolvedPath) {
     return link(src, dst);
   }
 
-  symLink(src: string, dst: string) {
+  symLink(src: string, dst: ResolvedPath) {
     return symlink(src, dst);
   }
 
-  readLink(path: string) {
+  readLink(path: ResolvedPath) {
     return readlink(path);
   }
 
-  rename(oldPath: string, newPath: string) {
+  rename(oldPath: ResolvedPath, newPath: ResolvedPath) {
     return rename(oldPath, newPath);
   }
 
