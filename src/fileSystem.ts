@@ -128,16 +128,6 @@ export class OpenFile implements AsyncDisposable {
     // Files shouldn't have path_ rights even if manually given.
     rights &= ~Rights.AllPath;
 
-    // // Throw NOTDIR if opening a regular file with a trailing slash to appease WASI.
-    // if (
-    //   hostPath.endsWith('/') &&
-    //   // this one could be skipped, it's an optimisation to skip stat() if we're opening as a directory anyway
-    //   !(openFlags & OpenFlags.Directory) &&
-    //   !(await lstat(hostPath)).isDirectory()
-    // ) {
-    //   throw new SystemError(E.NOTDIR);
-    // }
-
     let nodeFlags = 0;
 
     if (openFlags & OpenFlags.Create) {

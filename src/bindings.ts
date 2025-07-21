@@ -52,6 +52,7 @@ export enum E {
   INVAL = 28,
   ISDIR = 31,
   LOOP = 32,
+  NAMETOOLONG = 37,
   NOENT = 44,
   NOSYS = 52,
   NOTDIR = 54,
@@ -627,12 +628,16 @@ export default class Bindings implements AsyncDisposable {
         pathPtr: ptr<string>,
         pathLen: number
       ) => {
-        string.set(
-          this._getBuffer(),
-          pathPtr,
-          this._openFiles.getPreOpen(fd).wasiPath,
-          pathLen
-        );
+        if (
+          !string.set(
+            this._getBuffer(),
+            pathPtr,
+            this._openFiles.getPreOpen(fd).wasiPath,
+            pathLen
+          ).ok
+        ) {
+          throw new SystemError(E.NAMETOOLONG);
+        }
       },
       environ_sizes_get: (countPtr: ptr<number>, sizePtr: ptr<number>) =>
         this._env.sizes_get(this._getBuffer(), countPtr, sizePtr),
@@ -717,6 +722,16 @@ export default class Bindings implements AsyncDisposable {
           rightsInheriting &= dir.rightsInheriting;
           fd = await this._openFiles.openDir(path, rights, rightsInheriting);
         } else {
+          // Throw NOTDIR if opening a regular file with a trailing slash to appease WASI.
+          if (
+            path.endsWith('/') &&
+            // this one could be skipped, it's an optimisation to skip stat() if we're opening as a directory anyway
+            !(oFlags & OpenFlags.Directory) &&
+            (await this._openFiles.stat(path)).filetype !== FileType.Directory
+          ) {
+            throw new SystemError(E.NOTDIR);
+          }
+
           fd = await this._openFiles.openFile(path, oFlags, fdFlags, rights);
         }
 
@@ -853,15 +868,19 @@ export default class Bindings implements AsyncDisposable {
           dirent_t.set(buf, bufPtr as ptr<dirent_t>, dirEnt);
           bufPtr = (bufPtr + dirent_t.size) as ptr<dirent_t>;
           bufLen -= dirent_t.size;
-          let writtenLen = string.set(
+          let { ok, written } = string.set(
             buf,
             bufPtr as ptr<string>,
             name,
-            // Don't overflow the buffer.
-            Math.min(nameLen, bufLen)
+            bufLen
           );
-          bufPtr = (bufPtr + writtenLen) as ptr<dirent_t>;
-          bufLen -= writtenLen;
+          if (!ok) {
+            // Tell consumer that we filled the entire buffer so it's not an EOF.
+            bufPtr = (bufPtr + bufLen) as ptr<dirent_t>;
+            break;
+          }
+          bufPtr = (bufPtr + written) as ptr<dirent_t>;
+          bufLen -= written;
         }
         size_t.set(buf, bufUsedPtr, bufPtr - initialBufPtr);
       },
@@ -885,7 +904,7 @@ export default class Bindings implements AsyncDisposable {
         uint32_t.set(
           this._getBuffer(),
           bufUsedPtr,
-          string.set(this._getBuffer(), bufPtr, contents, bufLen)
+          string.set(this._getBuffer(), bufPtr, contents, bufLen).written
         );
       },
       path_filestat_get: async (
@@ -1096,16 +1115,18 @@ export default class Bindings implements AsyncDisposable {
           // Absolute paths are not allowed in symlinks.
           throw new SystemError(E.INVAL);
         }
-        return this._openFiles.symLink(
-          src,
-          await this._resolve(
-            newDirFd,
-            Rights.PathSymlink,
-            newPath,
-            newPathLen,
-            E.EXIST
-          )
+        let dst = await this._resolve(
+          newDirFd,
+          Rights.PathSymlink,
+          newPath,
+          newPathLen,
+          E.EXIST
         );
+        if (dst.endsWith('/')) {
+          // If the destination ends with a slash, throw an error to appease WASI.
+          throw new SystemError(E.NOENT);
+        }
+        return this._openFiles.symLink(src, dst);
       },
       clock_time_get: (
         id: ClockId,
@@ -1287,6 +1308,9 @@ export default class Bindings implements AsyncDisposable {
           break;
         case 'ELOOP':
           code = E.LOOP;
+          break;
+        case 'ENAMETOOLONG':
+          code = E.NAMETOOLONG;
           break;
       }
     }
