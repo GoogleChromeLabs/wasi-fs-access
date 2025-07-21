@@ -17,15 +17,15 @@ import * as fs from 'node:fs';
 import {
   link,
   lstat,
+  lutimes,
   mkdir,
   readdir,
   readlink,
+  realpath,
   rename,
   rmdir,
-  stat,
   symlink,
-  unlink,
-  utimes
+  unlink
 } from 'node:fs/promises';
 import {
   fd_t,
@@ -39,15 +39,11 @@ import {
   NoPreopen,
   timestamp_t,
   dirent_t,
-  SetTimeFlags,
-  LookupFlags
+  SetTimeFlags
 } from './bindings.js';
-import { resolve as resolvePath_ } from 'node:path/posix';
 import { promisify } from 'node:util';
 
 type ResolvedPath = string & { __resolved: true };
-
-const resolvePath = resolvePath_ as (...paths: string[]) => ResolvedPath;
 
 // Note: not using fs/promises because it doesn't allow constructing file handles from raw fd, and we need some file ops for stdin/stdout/stderr.
 const open = promisify(fs.open);
@@ -132,15 +128,15 @@ export class OpenFile implements AsyncDisposable {
     // Files shouldn't have path_ rights even if manually given.
     rights &= ~Rights.AllPath;
 
-    // Throw NOTDIR if opening a regular file with a trailing slash to appease WASI.
-    if (
-      hostPath.endsWith('/') &&
-      // this one could be skipped, it's an optimisation to skip stat() if we're opening as a directory anyway
-      !(openFlags & OpenFlags.Directory) &&
-      !(await stat(hostPath)).isDirectory()
-    ) {
-      throw new SystemError(E.NOTDIR);
-    }
+    // // Throw NOTDIR if opening a regular file with a trailing slash to appease WASI.
+    // if (
+    //   hostPath.endsWith('/') &&
+    //   // this one could be skipped, it's an optimisation to skip stat() if we're opening as a directory anyway
+    //   !(openFlags & OpenFlags.Directory) &&
+    //   !(await lstat(hostPath)).isDirectory()
+    // ) {
+    //   throw new SystemError(E.NOTDIR);
+    // }
 
     let nodeFlags = 0;
 
@@ -278,6 +274,12 @@ export class OpenDirectory extends OpenFile {
     super(hostFd, FdFlags.None, rights);
   }
 
+  joinPath(...components: string[]): ResolvedPath {
+    // Note: this is a simple join, not a full path resolution.
+    // We assume that components are already sanitized and don't contain any path traversal.
+    return [this._hostPath, ...components].join('/') as ResolvedPath;
+  }
+
   static async openDir(
     hostPath: ResolvedPath,
     rights: Rights,
@@ -320,7 +322,7 @@ export class OpenDirectory extends OpenFile {
           ino: 0n
         };
       } else {
-        let stats = await stat(this.resolve(name), {
+        let stats = await lstat(this.joinPath(name), {
           bigint: true
         });
         yield {
@@ -344,23 +346,6 @@ export class OpenDirectory extends OpenFile {
       }
       yield item;
     }
-  }
-
-  resolve(path: string) {
-    let resolvedPath = resolvePath(this._hostPath, path);
-    if (
-      !resolvedPath.startsWith(`${this._hostPath}/`) &&
-      resolvedPath !== this._hostPath
-    ) {
-      // Prevent access outside the given directory descriptor.
-      throw new SystemError(E.NOTCAPABLE);
-    }
-    // WASI cares about trailing slash in some places, but Node's `resolve` removes it.
-    // Add it back manually.
-    if (path.endsWith('/')) {
-      resolvedPath = (resolvedPath + '/') as ResolvedPath;
-    }
-    return resolvedPath;
   }
 }
 
@@ -400,13 +385,13 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   public async addPreOpen(wasiPath: string, hostPath: string) {
+    let resolvedPath = (await realpath(hostPath)) as ResolvedPath;
+
     this._add(
       new PreopenDirectory(
         wasiPath,
-        // We'll be judging "did this thing resolve outside the preopen directory" by checking if the resolved path starts with the preopen path.
-        // In order to do that, we need to store a fully resolved path.
-        resolvePath(hostPath),
-        await open(hostPath, fsc.O_DIRECTORY)
+        resolvedPath,
+        await open(resolvedPath, fsc.O_DIRECTORY)
       )
     );
   }
@@ -474,28 +459,17 @@ export class OpenFiles implements AsyncDisposable {
     return rmdir(path);
   }
 
-  async stat(path: ResolvedPath, lookupFlags: LookupFlags) {
-    return getNodeStats(
-      path,
-      lookupFlags & LookupFlags.FollowSymlinks ? stat : lstat
-    );
+  async stat(path: ResolvedPath) {
+    return getNodeStats(path, lstat);
   }
 
   setTimes(
     path: ResolvedPath,
-    lookupFlags: LookupFlags,
     flags: SetTimeFlags,
     accessTimeNs: timestamp_t,
     modTimeNs: timestamp_t
   ) {
-    return setTimes(
-      path,
-      lookupFlags & LookupFlags.FollowSymlinks ? stat : lstat,
-      flags,
-      accessTimeNs,
-      modTimeNs,
-      utimes
-    );
+    return setTimes(path, lstat, flags, accessTimeNs, modTimeNs, lutimes);
   }
 
   link(src: ResolvedPath, dst: ResolvedPath) {

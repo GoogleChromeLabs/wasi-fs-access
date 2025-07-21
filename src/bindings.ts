@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { OpenFile, OpenFiles } from './fileSystem.js';
+import { OpenDirectory, OpenFile, OpenFiles } from './fileSystem.js';
 import {
   enumer,
   ptr,
@@ -214,7 +214,7 @@ const event_t = struct({
 });
 type event_t = TargetType<typeof event_t>;
 
-export const enum LookupFlags {
+const enum LookupFlags {
   None,
   FollowSymlinks = 1 << 0
 }
@@ -375,10 +375,24 @@ function getTime(id: ClockId) {
   }
 }
 
-export interface ResolvedPath {
+export interface ResolvedPathWithRights {
   path: string;
   rights: Rights;
   rightsInheriting: Rights;
+}
+
+const enum SymlinkBehaviour {
+  NoFollow = -1,
+  Follow = E.SUCCESS
+}
+
+function lookupFlagsToSymlinkBehaviour(
+  lookupFlags: LookupFlags,
+  noFollow: SymlinkBehaviour | E = SymlinkBehaviour.NoFollow
+) {
+  return lookupFlags & LookupFlags.FollowSymlinks
+    ? SymlinkBehaviour.Follow
+    : noFollow;
 }
 
 export default class Bindings implements AsyncDisposable {
@@ -421,15 +435,108 @@ export default class Bindings implements AsyncDisposable {
     return memory.buffer;
   }
 
-  private _resolve(
+  private async _resolve(
     dirFd: fd_t,
+    needDirRights: Rights,
     pathPtr: ptr<string>,
     pathLen: number,
-    needDirRights: Rights
+    finalSymlinkBehaviour: SymlinkBehaviour | E
   ) {
-    return this._openFiles
-      .getDir(dirFd, needDirRights)
-      .resolve(string.get(this._getBuffer(), pathPtr, pathLen));
+    return this._resolveWithDir(
+      this._openFiles.getDir(dirFd, needDirRights),
+      pathPtr,
+      pathLen,
+      finalSymlinkBehaviour
+    );
+  }
+
+  private async _resolveWithDir(
+    dir: OpenDirectory,
+    pathPtr: ptr<string>,
+    pathLen: number,
+    finalSymlinkBehaviour: SymlinkBehaviour | E
+  ) {
+    const openFiles = this._openFiles;
+
+    let resolvedPathComponents: string[] = [];
+
+    function joinPath() {
+      return dir.joinPath(...resolvedPathComponents);
+    }
+
+    async function resolveSubPath(
+      subPath: string,
+      finalSymlinkBehaviour: SymlinkBehaviour | E
+    ) {
+      let subPathComponents = subPath.split('/');
+      if (subPathComponents[0] === '') {
+        // Absolute path, never allowed.
+        throw new SystemError(E.NOTCAPABLE);
+      }
+      // Resolve the subpath relative to the current directory.
+      for (let [i, component] of subPathComponents.entries()) {
+        switch (component) {
+          case '':
+            break; // Skip empty components (e.g. double slashes).
+          case '.':
+            break; // Skip current directory.
+          case '..':
+            // Try to go up one directory, but only within the current path.
+            if (resolvedPathComponents.pop() === undefined) {
+              // If we try to go outside the scope, throw an error.
+              throw new SystemError(E.NOTCAPABLE);
+            }
+            break;
+          default: {
+            let symlinkBehaviour =
+              i === subPathComponents.length - 1
+                ? finalSymlinkBehaviour
+                : SymlinkBehaviour.Follow;
+            if (symlinkBehaviour !== SymlinkBehaviour.NoFollow) {
+              // If we have any behaviour except "no follow", we need to check if the component is a symlink.
+              try {
+                component = await openFiles.readLink(joinPath());
+              } catch (err: any) {
+                if (err.code === 'EINVAL') {
+                  // Not a symlink, just use the component as-is.
+                  symlinkBehaviour = SymlinkBehaviour.NoFollow;
+                } else {
+                  throw err;
+                }
+              }
+            }
+            switch (symlinkBehaviour) {
+              case SymlinkBehaviour.Follow:
+                // If the final symlink should be followed, resolve it recursively.
+                await resolveSubPath(component, SymlinkBehaviour.Follow);
+                break;
+              case SymlinkBehaviour.NoFollow:
+                // If we are not following the symlink, we just add the component to the resolved
+                // path components.
+                resolvedPathComponents.push(component);
+                break;
+              default:
+                // If we have an error behaviour, throw the corresponding error.
+                throw new SystemError(symlinkBehaviour);
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    const path = string.get(this._getBuffer(), pathPtr, pathLen);
+
+    // WASI requires special behaviour for paths ending with a slash, so we must preserve it.
+    const pathHasTrailingSlash = path.endsWith('/');
+
+    await resolveSubPath(path, finalSymlinkBehaviour);
+
+    if (pathHasTrailingSlash) {
+      resolvedPathComponents.push('');
+    }
+
+    return joinPath();
   }
 
   addPreOpen(hostPath: string, wasiPath: string) {
@@ -562,7 +669,14 @@ export default class Bindings implements AsyncDisposable {
           neededDirRights |= Rights.PathFilestatSetSize;
         }
         let dir = this._openFiles.getDir(dirFd, neededDirRights);
-        let path = dir.resolve(string.get(this._getBuffer(), pathPtr, pathLen));
+        let path = await this._resolveWithDir(
+          dir,
+          pathPtr,
+          pathLen,
+          oFlags & OpenFlags.Exclusive
+            ? E.EXIST
+            : lookupFlagsToSymlinkBehaviour(lookupFlags, E.LOOP)
+        );
 
         let rights = rights_t.fromRaw(fsRightsBase);
         // This is weeeeird step around WASI cap system IMO and I don't see it specced anywhere,
@@ -570,9 +684,11 @@ export default class Bindings implements AsyncDisposable {
         let filestatRights = dir.rights & Rights.AllPathFilestat;
         // turn all path filestat rights into fd filestat rights
         filestatRights <<= 3;
-        // ...unless it's a directory, which can't have set_size right
         if (oFlags & OpenFlags.Directory) {
+          // ...unless it's a directory, which can't have set_size right
           filestatRights &= ~Rights.FdFilestatSetSize;
+          // ...and also can't seek, so we remove that too
+          rights &= ~Rights.FdSeek;
         }
         // add those fd rights to the explicitly provided ones
         rights |= filestatRights;
@@ -652,7 +768,13 @@ export default class Bindings implements AsyncDisposable {
         pathLen: number
       ) =>
         this._openFiles.createDir(
-          this._resolve(dirFd, pathPtr, pathLen, Rights.PathCreateDirectory)
+          await this._resolve(
+            dirFd,
+            Rights.PathCreateDirectory,
+            pathPtr,
+            pathLen,
+            E.EXIST
+          )
         ),
       path_rename: async (
         oldDirFd: fd_t,
@@ -663,17 +785,19 @@ export default class Bindings implements AsyncDisposable {
         newPathLen: number
       ) =>
         this._openFiles.rename(
-          this._resolve(
+          await this._resolve(
             oldDirFd,
+            Rights.PathRenameSource,
             oldPathPtr,
             oldPathLen,
-            Rights.PathRenameSource
+            SymlinkBehaviour.Follow
           ),
-          this._resolve(
+          await this._resolve(
             newDirFd,
+            Rights.PathRenameTarget,
             newPathPtr,
             newPathLen,
-            Rights.PathRenameTarget
+            SymlinkBehaviour.Follow
           )
         ),
       path_remove_directory: async (
@@ -681,25 +805,20 @@ export default class Bindings implements AsyncDisposable {
         pathPtr: ptr<string>,
         pathLen: number
       ) => {
-        let path = this._resolve(
+        let path = await this._resolve(
           dirFd,
+          Rights.PathRemoveDirectory,
           pathPtr,
           pathLen,
-          Rights.PathRemoveDirectory
+          SymlinkBehaviour.NoFollow
         );
-        try {
-          await this._openFiles.rmDir(path);
-        } catch (e: any) {
-          if (process.platform === 'win32' && e.code === 'ENOENT') {
-            // Fixup for https://github.com/nodejs/node/issues/18014.
-            // Try to stat the path to see if it actually exists.
-            // If this fails, it will fail with ENOENT again, which is fine, but
-            // if it doesn't, it means we should throw E.NOTDIR instead.
-            await this._openFiles.stat(path, LookupFlags.FollowSymlinks);
-            throw new SystemError(E.NOTDIR);
-          }
-          throw e;
+        // Fixup for https://github.com/nodejs/node/issues/18014 as well as matching WASI behaviour in not following final symlink.
+        if (
+          (await this._openFiles.stat(path)).filetype !== FileType.Directory
+        ) {
+          throw new SystemError(E.NOTDIR);
         }
+        await this._openFiles.rmDir(path);
       },
       fd_readdir: async (
         fd: fd_t,
@@ -734,25 +853,15 @@ export default class Bindings implements AsyncDisposable {
           dirent_t.set(buf, bufPtr as ptr<dirent_t>, dirEnt);
           bufPtr = (bufPtr + dirent_t.size) as ptr<dirent_t>;
           bufLen -= dirent_t.size;
-          try {
-            string.set(
-              buf,
-              bufPtr as ptr<string>,
-              name,
-              // Don't overflow the buffer.
-              Math.min(nameLen, bufLen)
-            );
-          } catch (e) {
-            if (e instanceof RangeError) {
-              // If the string doesn't fit, we just stop here.
-              // Tell consumer that we filled the entire buffer so it's not an EOF.
-              bufPtr = (bufPtr + bufLen) as ptr<dirent_t>;
-              break;
-            }
-            throw e;
-          }
-          bufPtr = (bufPtr + nameLen) as ptr<dirent_t>;
-          bufLen -= nameLen;
+          let writtenLen = string.set(
+            buf,
+            bufPtr as ptr<string>,
+            name,
+            // Don't overflow the buffer.
+            Math.min(nameLen, bufLen)
+          );
+          bufPtr = (bufPtr + writtenLen) as ptr<dirent_t>;
+          bufLen -= writtenLen;
         }
         size_t.set(buf, bufUsedPtr, bufPtr - initialBufPtr);
       },
@@ -765,7 +874,13 @@ export default class Bindings implements AsyncDisposable {
         bufUsedPtr: ptr<number>
       ) => {
         let contents = await this._openFiles.readLink(
-          this._resolve(dirFd, pathPtr, pathLen, Rights.PathReadlink)
+          await this._resolve(
+            dirFd,
+            Rights.PathReadlink,
+            pathPtr,
+            pathLen,
+            SymlinkBehaviour.NoFollow
+          )
         );
         uint32_t.set(
           this._getBuffer(),
@@ -784,8 +899,13 @@ export default class Bindings implements AsyncDisposable {
           this._getBuffer(),
           filestatPtr,
           await this._openFiles.stat(
-            this._resolve(dirFd, pathPtr, pathLen, Rights.PathFilestatGet),
-            lookupFlags
+            await this._resolve(
+              dirFd,
+              Rights.PathFilestatGet,
+              pathPtr,
+              pathLen,
+              lookupFlagsToSymlinkBehaviour(lookupFlags)
+            )
           )
         ),
       fd_seek: async (
@@ -831,17 +951,17 @@ export default class Bindings implements AsyncDisposable {
         pathPtr: ptr<string>,
         pathLen: number
       ) => {
-        let path = this._resolve(
+        let path = await this._resolve(
           dirFd,
+          Rights.PathUnlinkFile,
           pathPtr,
           pathLen,
-          Rights.PathUnlinkFile
+          SymlinkBehaviour.NoFollow
         );
         if (path.endsWith('/')) {
           // If the path ends with a slash, throw an error to appease WASI.
           throw new SystemError(
-            (await this._openFiles.stat(path, LookupFlags.None)).filetype ===
-            FileType.Directory
+            (await this._openFiles.stat(path)).filetype === FileType.Directory
               ? E.ISDIR
               : E.NOTDIR
           );
@@ -929,7 +1049,7 @@ export default class Bindings implements AsyncDisposable {
         }
         size_t.set(buf, eventsNumPtr, eventsNum);
       },
-      path_link: (
+      path_link: async (
         oldDirFd: fd_t,
         oldLookupFlags: LookupFlags,
         oldPathPtr: ptr<string>,
@@ -939,13 +1059,20 @@ export default class Bindings implements AsyncDisposable {
         newPathLen: number
       ) =>
         this._openFiles.link(
-          this._resolve(
+          await this._resolve(
             oldDirFd,
+            Rights.PathLinkSource,
             oldPathPtr,
             oldPathLen,
-            Rights.PathLinkSource
+            lookupFlagsToSymlinkBehaviour(oldLookupFlags)
           ),
-          this._resolve(newFd, newPathPtr, newPathLen, Rights.PathLinkTarget)
+          await this._resolve(
+            newFd,
+            Rights.PathLinkTarget,
+            newPathPtr,
+            newPathLen,
+            E.EXIST
+          )
         ),
       fd_datasync: (fd: fd_t) =>
         this._openFiles.getFile(fd, Rights.FdDatasync).datasync(),
@@ -963,11 +1090,23 @@ export default class Bindings implements AsyncDisposable {
         newDirFd: fd_t,
         newPath: ptr<string>,
         newPathLen: ptr<string>
-      ) =>
-        this._openFiles.symLink(
-          string.get(this._getBuffer(), oldPath, oldPathLen),
-          this._resolve(newDirFd, newPath, newPathLen, Rights.PathSymlink)
-        ),
+      ) => {
+        let src = string.get(this._getBuffer(), oldPath, oldPathLen);
+        if (src.startsWith('/')) {
+          // Absolute paths are not allowed in symlinks.
+          throw new SystemError(E.INVAL);
+        }
+        return this._openFiles.symLink(
+          src,
+          await this._resolve(
+            newDirFd,
+            Rights.PathSymlink,
+            newPath,
+            newPathLen,
+            E.EXIST
+          )
+        );
+      },
       clock_time_get: (
         id: ClockId,
         precision: timestamp_t,
@@ -997,8 +1136,13 @@ export default class Bindings implements AsyncDisposable {
         flags: SetTimeFlags
       ) =>
         this._openFiles.setTimes(
-          this._resolve(dirFd, pathPtr, pathLen, Rights.PathFilestatSetTimes),
-          lookupFlags,
+          await this._resolve(
+            dirFd,
+            Rights.PathFilestatSetTimes,
+            pathPtr,
+            pathLen,
+            lookupFlagsToSymlinkBehaviour(lookupFlags)
+          ),
           flags,
           newAccessTimeNs,
           newModTimeNs
