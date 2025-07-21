@@ -51,6 +51,7 @@ export enum E {
   EXIST = 20,
   INVAL = 28,
   ISDIR = 31,
+  LOOP = 32,
   NOENT = 44,
   NOSYS = 52,
   NOTDIR = 54,
@@ -1139,6 +1140,9 @@ export default class Bindings implements AsyncDisposable {
           break;
         case 'ENOTEMPTY':
           code = E.NOTEMPTY;
+          break;
+        case 'ELOOP':
+          code = E.LOOP;
           break;
       }
     }
