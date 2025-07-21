@@ -956,7 +956,7 @@ export default class Bindings implements AsyncDisposable {
           .setSize(Number(newSize)),
       fd_renumber: async (from: fd_t, to: fd_t) =>
         this._openFiles.renumber(from, to),
-      path_symlink: (
+      path_symlink: async (
         oldPath: ptr<string>,
         oldPathLen: ptr<string>,
         newDirFd: fd_t,
