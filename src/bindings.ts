@@ -1306,6 +1306,9 @@ export default class Bindings implements AsyncDisposable {
         case 'ENAMETOOLONG':
           code = E.NAMETOOLONG;
           break;
+        case 'EINVAL':
+          code = E.INVAL;
+          break;
       }
     }
     if (code) {
