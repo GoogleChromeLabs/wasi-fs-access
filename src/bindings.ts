@@ -498,7 +498,7 @@ export default class Bindings implements AsyncDisposable {
               try {
                 component = await openFiles.readLink(joinPath(component));
               } catch (err: any) {
-                if (err.code === 'EINVAL') {
+                if (err.code === 'EINVAL' || err.code === 'ENOENT') {
                   // Not a symlink, just use the component as-is.
                   symlinkBehaviour = SymlinkBehaviour.NoFollow;
                 } else {
