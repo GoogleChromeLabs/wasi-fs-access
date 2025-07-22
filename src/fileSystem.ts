@@ -255,7 +255,7 @@ function cachingIterable<T>(iter: AsyncIterable<T>): AsyncIterable<T> {
 }
 
 export class OpenDirectory extends OpenFile {
-  constructor(
+  protected constructor(
     private readonly _hostPath: ResolvedPath,
     hostFd: number,
     rights: Rights,
@@ -275,9 +275,17 @@ export class OpenDirectory extends OpenFile {
     rights: Rights,
     rightsInheriting: Rights
   ) {
+    let flag = fsc.O_DIRECTORY;
+    if (flag === undefined) {
+      // If the O_DIRECTORY flag is not supported on this OS (like Windows), we need to check if it's actually a directory.
+      if (!(await lstat(hostPath)).isDirectory()) {
+        throw new SystemError(E.NOTDIR);
+      }
+      flag = 0; // No special flags needed.
+    }
     return new OpenDirectory(
       hostPath,
-      await open(hostPath, fsc.O_DIRECTORY),
+      await open(hostPath, flag),
       rights,
       rightsInheriting
     );
