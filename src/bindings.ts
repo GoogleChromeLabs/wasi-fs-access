@@ -533,11 +533,27 @@ export default class Bindings implements AsyncDisposable {
 
     await resolveSubPath(path, finalSymlinkBehaviour);
 
+    const resolvedPath = joinPath();
+
     if (pathHasTrailingSlash) {
-      resolvedPathComponents.push('');
+      try {
+        // If the path had a trailing slash, the target must be a directory (or not exist, because we're creating one).
+        if (
+          (await this._openFiles.stat(resolvedPath)).filetype !==
+          FileType.Directory
+        ) {
+          throw new SystemError(E.NOTDIR);
+        }
+      } catch (err: any) {
+        if (err.code !== 'ENOENT') {
+          // If the target doesn't exist, it's fine - let the specific API deal with ENOENT.
+          // For anything else, rethrow the error.
+          throw err;
+        }
+      }
     }
 
-    return joinPath();
+    return resolvedPath;
   }
 
   addPreOpen(hostPath: string, wasiPath: string) {
@@ -722,16 +738,6 @@ export default class Bindings implements AsyncDisposable {
           rightsInheriting &= dir.rightsInheriting;
           fd = await this._openFiles.openDir(path, rights, rightsInheriting);
         } else {
-          // Throw NOTDIR if opening a regular file with a trailing slash to appease WASI.
-          if (
-            path.endsWith('/') &&
-            // this one could be skipped, it's an optimisation to skip stat() if we're opening as a directory anyway
-            !(oFlags & OpenFlags.Directory) &&
-            (await this._openFiles.stat(path)).filetype !== FileType.Directory
-          ) {
-            throw new SystemError(E.NOTDIR);
-          }
-
           fd = await this._openFiles.openFile(path, oFlags, fdFlags, rights);
         }
 
@@ -977,14 +983,6 @@ export default class Bindings implements AsyncDisposable {
           pathLen,
           SymlinkBehaviour.NoFollow
         );
-        if (path.endsWith('/')) {
-          // If the path ends with a slash, throw an error to appease WASI.
-          throw new SystemError(
-            (await this._openFiles.stat(path)).filetype === FileType.Directory
-              ? E.ISDIR
-              : E.NOTDIR
-          );
-        }
         return this._openFiles.rmFile(path);
       },
       poll_oneoff: async (
@@ -1122,10 +1120,6 @@ export default class Bindings implements AsyncDisposable {
           newPathLen,
           E.EXIST
         );
-        if (dst.endsWith('/')) {
-          // If the destination ends with a slash, throw an error to appease WASI.
-          throw new SystemError(E.NOENT);
-        }
         return this._openFiles.symLink(src, dst);
       },
       clock_time_get: (
