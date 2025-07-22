@@ -461,8 +461,8 @@ export default class Bindings implements AsyncDisposable {
 
     let resolvedPathComponents: string[] = [];
 
-    function joinPath() {
-      return dir.joinPath(...resolvedPathComponents);
+    function joinPath(...extraComponents: string[]) {
+      return dir.joinPath(...resolvedPathComponents, ...extraComponents);
     }
 
     async function resolveSubPath(
@@ -496,7 +496,7 @@ export default class Bindings implements AsyncDisposable {
             if (symlinkBehaviour !== SymlinkBehaviour.NoFollow) {
               // If we have any behaviour except "no follow", we need to check if the component is a symlink.
               try {
-                component = await openFiles.readLink(joinPath());
+                component = await openFiles.readLink(joinPath(component));
               } catch (err: any) {
                 if (err.code === 'EINVAL') {
                   // Not a symlink, just use the component as-is.
