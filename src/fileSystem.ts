@@ -42,6 +42,8 @@ import {
   SetTimeFlags
 } from './bindings.js';
 import { promisify } from 'node:util';
+import { once } from 'node:events';
+import { Readable, Writable } from 'node:stream';
 
 type ResolvedPath = string & { __resolved: true };
 
@@ -103,6 +105,8 @@ async function setTimes<T>(
 }
 
 export class OpenFile implements AsyncDisposable {
+  protected _isOpen = true;
+
   constructor(
     private readonly hostFd: number,
     public fdFlags: FdFlags,
@@ -175,12 +179,15 @@ export class OpenFile implements AsyncDisposable {
     this._position = value;
   }
 
-  async readvAt(bufs: Uint8Array[], position: number): Promise<number> {
+  async readvAt(bufs: Uint8Array[], position = this.position): Promise<number> {
     const { bytesRead } = await readv(this.hostFd, bufs, position);
     return bytesRead;
   }
 
-  async writevAt(bufs: Uint8Array[], position: number): Promise<number> {
+  async writevAt(
+    bufs: Uint8Array[],
+    position = this.position
+  ): Promise<number> {
     const { bytesWritten } = await writev(this.hostFd, bufs, position);
     return bytesWritten;
   }
@@ -216,11 +223,113 @@ export class OpenFile implements AsyncDisposable {
     );
   }
 
+  async pollRead(signal?: AbortSignal): Promise<number | undefined> {
+    if (this._isOpen) {
+      // For regular files, we are always ready to read.
+      return 1;
+    }
+  }
+
+  async pollWrite(signal?: AbortSignal): Promise<number | undefined> {
+    if (this._isOpen) {
+      // For regular files, we are always ready to write.
+      return 1;
+    }
+  }
+
   async [Symbol.asyncDispose]() {
+    this._isOpen = false;
     // Don't close real stdin/stdout/stderr, as they might be still needed by the parent process.
     if (this.hostFd >= 3) {
       await close(this.hostFd);
     }
+  }
+}
+
+export class StdStream extends OpenFile {
+  constructor(
+    private readonly _stream: (Readable | Writable) & { fd: number }
+  ) {
+    const { fd } = _stream;
+
+    super(
+      fd,
+      FdFlags.None,
+      (fd === 0
+        ? Rights.FdRead
+        : Rights.FdWrite | Rights.FdSync | Rights.FdDatasync) |
+        Rights.FdFilestatGet |
+        Rights.PollFdReadWrite
+    );
+  }
+
+  async pollRead(signal?: AbortSignal) {
+    if (!(this._stream instanceof Readable)) {
+      throw new SystemError(E.NOTCAPABLE);
+    }
+    if (!this._isOpen || !this._stream.readable) {
+      return;
+    }
+    if (!this._stream.readableLength) {
+      await once(this._stream, 'readable', { signal });
+    }
+    return this._stream.readableLength;
+  }
+
+  async readvAt(bufs: Uint8Array[], position?: number) {
+    if (position !== undefined) {
+      // Positional reads are not supported for stdin/stdout/stderr.
+      throw new SystemError(E.NOTCAPABLE);
+    }
+    // Wait for the stream to become readable.
+    await this.pollRead();
+    let stream = this._stream as Readable;
+    let totalRead = 0;
+    for (let buf of bufs) {
+      // If we're here, either no data is available, or the leftover chunk is smaller than the requested size.
+      // Recheck as we're okay with smaller chunks, just not with bigger ones.
+      let chunk = stream.read(buf.byteLength) ?? stream.read();
+      if (!chunk) {
+        break;
+      }
+      buf.set(chunk);
+      totalRead += chunk.length;
+      if (chunk.length < buf.length) {
+        // If we read less than requested, we can stop reading.
+        break;
+      }
+    }
+    return totalRead;
+  }
+
+  async pollWrite(signal?: AbortSignal) {
+    if (!(this._stream instanceof Writable)) {
+      throw new SystemError(E.NOTCAPABLE);
+    }
+    if (!this._isOpen || !this._stream.writable) {
+      return;
+    }
+    if (this._stream.writableNeedDrain) {
+      // If the stream is not ready to write, wait for it to drain.
+      await once(this._stream, 'drain', { signal });
+    }
+    return this._stream.writableHighWaterMark - this._stream.writableLength;
+  }
+
+  async writevAt(bufs: Uint8Array[], position?: number) {
+    if (position !== undefined) {
+      // Positional writes are not supported for stdin/stdout/stderr.
+      throw new SystemError(E.NOTCAPABLE);
+    }
+    let stream = this._stream as Writable;
+    let totalWritten = 0;
+    for (let buf of bufs) {
+      await new Promise<void>((resolve, reject) =>
+        stream.write(buf, err => (err ? reject(err) : resolve()))
+      );
+      totalWritten += buf.length;
+    }
+    return totalWritten;
   }
 }
 
@@ -372,9 +481,9 @@ export class OpenFiles implements AsyncDisposable {
   private _nextFd = 0 as fd_t;
 
   constructor() {
-    this._add(new OpenFile(process.stdin.fd, FdFlags.None, ~Rights.AllPath));
-    this._add(new OpenFile(process.stdout.fd, FdFlags.None, ~Rights.AllPath));
-    this._add(new OpenFile(process.stderr.fd, FdFlags.None, ~Rights.AllPath));
+    this._add(new StdStream(process.stdin));
+    this._add(new StdStream(process.stdout));
+    this._add(new StdStream(process.stderr));
   }
 
   private _add(handle: OpenFile | OpenDirectory) {

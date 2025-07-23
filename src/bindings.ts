@@ -286,7 +286,7 @@ export enum Rights {
   PathSymlink = 1 << 24,
   PathRemoveDirectory = 1 << 25,
   PathUnlinkFile = 1 << 26,
-  PollFdReadwrite = 1 << 27,
+  PollFdReadWrite = 1 << 27,
   SockShutdown = 1 << 28,
   SockAccept = 1 << 29,
   // Custom collections
@@ -577,7 +577,11 @@ export default class Bindings implements AsyncDisposable {
     iovsPtr: ptr<iovec_t>,
     iovsLen: number,
     nprocessedBytesPtr: ptr<number>,
-    io: (file: OpenFile, bufs: Uint8Array[], offset: number) => Promise<number>,
+    io: (
+      file: OpenFile,
+      bufs: Uint8Array[],
+      offset?: number
+    ) => Promise<number>,
     offset?: bigint
   ) {
     const buffer = this._getBuffer();
@@ -590,7 +594,7 @@ export default class Bindings implements AsyncDisposable {
     let nprocessedBytes = await io(
       file,
       iovecs,
-      offset !== undefined ? Number(offset) : file.position
+      offset !== undefined ? Number(offset) : undefined
     );
     size_t.set(this._getBuffer(), nprocessedBytesPtr, nprocessedBytes);
     if (offset === undefined) {
@@ -629,12 +633,12 @@ export default class Bindings implements AsyncDisposable {
       iovsPtr,
       iovsLen,
       nwrittenPtr,
-      async (f, bufs, calculatedOffset) => {
+      async (f, bufs, offset) => {
         // In O_APPEND mode with an implicit offset, we need to seek to the end of the file.
         if (offset === undefined && f.fdFlags & FdFlags.Append) {
-          calculatedOffset = f.position = Number((await f.stat()).size);
+          f.position = Number((await f.stat()).size);
         }
-        return f.writevAt(bufs, calculatedOffset);
+        return f.writevAt(bufs, offset);
       },
       offset
     );
@@ -1041,44 +1045,54 @@ export default class Bindings implements AsyncDisposable {
                   (subscriptionsPtr +
                     i * subscription_t.size) as ptr<subscription_t>
                 );
-                switch (union.tag) {
-                  case EventType.Clock: {
-                    let timeout = Number(union.data.timeout) / 1_000_000;
-                    if (union.data.flags === SubclockFlags.Absolute) {
-                      timeout -= getTime(union.data.id);
+                let eventData: Partial<event_t> = {
+                  error: E.SUCCESS,
+                  type: union.tag,
+                  userdata
+                };
+                try {
+                  switch (union.tag) {
+                    case EventType.Clock: {
+                      let timeout = Number(union.data.timeout) / 1_000_000;
+                      if (union.data.flags === SubclockFlags.Absolute) {
+                        timeout -= getTime(union.data.id);
+                      }
+                      // This is not completely correct, since setTimeout doesn't give the required precision for monotonic clock.
+                      await setTimeout(timeout, undefined, { signal });
+                      break;
                     }
-                    // This is not completely correct, since setTimeout doesn't give the required precision for monotonic clock.
-                    await setTimeout(timeout, undefined, { signal });
-                    break;
+                    case EventType.FdRead:
+                    case EventType.FdWrite: {
+                      let { fd } = union.data;
+                      // Just verify that the file descriptor is valid.
+                      // TODO: actually wait for stdin to be ready.
+                      // Other than that, even WASI spec says it should resolve immediately for regular files.
+                      let file = this._openFiles.getFile(
+                        fd,
+                        Rights.PollFdReadWrite
+                      );
+                      let nbytes = await (union.tag === EventType.FdRead
+                        ? file.pollRead(signal)
+                        : file.pollWrite(signal));
+                      eventData.fd_readwrite = {
+                        nbytes: BigInt(nbytes ?? 0),
+                        flags:
+                          nbytes === undefined
+                            ? EventRwFlags.FdReadWriteHangup
+                            : EventRwFlags.None
+                      };
+                      break;
+                    }
+                    default:
+                      unimplemented();
                   }
-                  case EventType.FdRead:
-                  case EventType.FdWrite: {
-                    let { fd } = union.data;
-                    // Just verify that the file descriptor is valid.
-                    // TODO: actually wait for stdin to be ready.
-                    // Other than that, even WASI spec says it should resolve immediately for regular files.
-                    this._openFiles.getFile(
-                      fd,
-                      union.tag === EventType.FdRead
-                        ? Rights.FdRead
-                        : Rights.FdWrite
-                    );
-                    break;
-                  }
-                  default:
-                    unimplemented();
+                } catch (err: any) {
+                  // Any errors from individual subscriptions should be stored in the event data instead of propagated.
+                  eventData.error = this._translateError(err);
                 }
                 // Note: doing this way is better than bare `Promise.race()` because it gives several events a chance
                 // to be resolved simultaneously.
-                Object.assign(event_t.get(buf, eventsPtr), {
-                  error: E.SUCCESS,
-                  type: union.tag,
-                  userdata,
-                  fd_readwrite: {
-                    nbytes: 1n,
-                    flags: EventRwFlags.None
-                  }
-                });
+                Object.assign(event_t.get(buf, eventsPtr), eventData);
                 eventsNum++;
                 eventsPtr = (eventsPtr + event_t.size) as ptr<event_t>;
               }
