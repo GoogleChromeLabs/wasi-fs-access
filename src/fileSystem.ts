@@ -400,10 +400,6 @@ export class OpenDirectory extends OpenFile {
     );
   }
 
-  set position(_value: number) {
-    throw new SystemError(E.NOTCAPABLE);
-  }
-
   private _entries?: AsyncIterable<DirentInfo>;
 
   private async *_readDirents(): AsyncIterable<DirentInfo> {

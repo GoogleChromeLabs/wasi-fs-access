@@ -14,12 +14,8 @@ if "--version" not in args:
     if "rust" in test_file_path.parts:
         # Not supported.
         envs.append("NO_FD_ALLOCATE")
-        match platform.system():
-            case "Linux":
-                envs.append("ERRNO_MODE_UNIX")
-            case "Windows":
-                # envs.append("ERRNO_MODE_WINDOWS")
-                envs.append("NO_RENAME_DIR_TO_EMPTY_DIR")
+        if platform.system() == "Windows":
+            envs.append("NO_RENAME_DIR_TO_EMPTY_DIR")
 
 r = subprocess.run(
     [

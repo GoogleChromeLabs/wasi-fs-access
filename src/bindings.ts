@@ -787,8 +787,14 @@ export default class Bindings implements AsyncDisposable {
         if (oFlags & OpenFlags.Directory) {
           // ...unless it's a directory, which can't have set_size right
           filestatRights &= ~Rights.FdFilestatSetSize;
-          // ...and also can't seek, so we remove that too
-          rights &= ~Rights.FdSeek;
+          // ...remove some more rights that are not applicable to directories
+          rights &= ~(
+            Rights.FdTell |
+            Rights.FdSeek |
+            Rights.FdAllocate |
+            Rights.FdAdvise |
+            Rights.FdFilestatSetSize
+          );
         }
         // add those fd rights to the explicitly provided ones
         rights |= filestatRights;
@@ -1244,9 +1250,16 @@ export default class Bindings implements AsyncDisposable {
       ) => timestamp_t.set(this._getBuffer(), resultPtr, getTime(id)),
       clock_res_get: (id: ClockId, resultPtr: ptr<timestamp_t>) =>
         timestamp_t.set(this._getBuffer(), resultPtr, 1 /* ms */),
-      fd_allocate: (fd: fd_t, offset: bigint, len: bigint) => unimplemented(),
-      fd_advise: (fd: fd_t, offset: bigint, len: bigint, advice: number) =>
-        unimplemented(),
+      fd_allocate: (fd: fd_t, offset: bigint, len: bigint) => {
+        // at least check validity of the file descriptor and rights
+        this._openFiles.getFile(fd, Rights.FdAllocate);
+        unimplemented();
+      },
+      fd_advise: (fd: fd_t, offset: bigint, len: bigint, advice: number) => {
+        // at least check validity of the file descriptor and rights
+        this._openFiles.getFile(fd, Rights.FdAdvise);
+        unimplemented();
+      },
       fd_filestat_set_times: async (
         fd: fd_t,
         newAccessTimeNs: timestamp_t,
