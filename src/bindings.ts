@@ -387,6 +387,12 @@ const enum SymlinkBehaviour {
   Follow = E.SUCCESS
 }
 
+const enum CheckTrailingSlash {
+  Ignore,
+  DirectoryOrNotExists,
+  MustBeExistingDirectory
+}
+
 function lookupFlagsToSymlinkBehaviour(
   lookupFlags: LookupFlags,
   noFollow: SymlinkBehaviour | E = SymlinkBehaviour.NoFollow
@@ -441,13 +447,15 @@ export default class Bindings implements AsyncDisposable {
     needDirRights: Rights,
     pathPtr: ptr<string>,
     pathLen: number,
-    finalSymlinkBehaviour: SymlinkBehaviour | E
+    finalSymlinkBehaviour: SymlinkBehaviour | E,
+    checkTrailingSlash: CheckTrailingSlash
   ) {
     return this._resolveWithDir(
       this._openFiles.getDir(dirFd, needDirRights),
       pathPtr,
       pathLen,
-      finalSymlinkBehaviour
+      finalSymlinkBehaviour,
+      checkTrailingSlash
     );
   }
 
@@ -455,7 +463,8 @@ export default class Bindings implements AsyncDisposable {
     dir: OpenDirectory,
     pathPtr: ptr<string>,
     pathLen: number,
-    finalSymlinkBehaviour: SymlinkBehaviour | E
+    finalSymlinkBehaviour: SymlinkBehaviour | E,
+    checkTrailingSlash: CheckTrailingSlash
   ) {
     const openFiles = this._openFiles;
 
@@ -529,7 +538,8 @@ export default class Bindings implements AsyncDisposable {
     const path = string.get(this._getBuffer(), pathPtr, pathLen);
 
     // WASI requires special behaviour for paths ending with a slash, so we must preserve it.
-    const pathHasTrailingSlash = path.endsWith('/');
+    const pathHasTrailingSlash =
+      checkTrailingSlash !== CheckTrailingSlash.Ignore && path.endsWith('/');
 
     await resolveSubPath(path, finalSymlinkBehaviour);
 
@@ -545,9 +555,10 @@ export default class Bindings implements AsyncDisposable {
           throw new SystemError(E.NOTDIR);
         }
       } catch (err: any) {
-        if (err.code !== 'ENOENT') {
-          // If the target doesn't exist, it's fine - let the specific API deal with ENOENT.
-          // For anything else, rethrow the error.
+        if (
+          err.code !== 'ENOENT' ||
+          checkTrailingSlash === CheckTrailingSlash.MustBeExistingDirectory
+        ) {
           throw err;
         }
       }
@@ -696,7 +707,8 @@ export default class Bindings implements AsyncDisposable {
           pathLen,
           oFlags & OpenFlags.Exclusive
             ? E.EXIST
-            : lookupFlagsToSymlinkBehaviour(lookupFlags, E.LOOP)
+            : lookupFlagsToSymlinkBehaviour(lookupFlags, E.LOOP),
+          CheckTrailingSlash.MustBeExistingDirectory
         );
 
         let rights = rights_t.fromRaw(fsRightsBase);
@@ -794,7 +806,8 @@ export default class Bindings implements AsyncDisposable {
             Rights.PathCreateDirectory,
             pathPtr,
             pathLen,
-            E.EXIST
+            SymlinkBehaviour.NoFollow,
+            CheckTrailingSlash.Ignore
           )
         ),
       path_rename: async (
@@ -811,14 +824,16 @@ export default class Bindings implements AsyncDisposable {
             Rights.PathRenameSource,
             oldPathPtr,
             oldPathLen,
-            SymlinkBehaviour.Follow
+            SymlinkBehaviour.Follow,
+            CheckTrailingSlash.MustBeExistingDirectory
           ),
           await this._resolve(
             newDirFd,
             Rights.PathRenameTarget,
             newPathPtr,
             newPathLen,
-            SymlinkBehaviour.Follow
+            SymlinkBehaviour.NoFollow,
+            CheckTrailingSlash.DirectoryOrNotExists
           )
         ),
       path_remove_directory: async (
@@ -831,15 +846,21 @@ export default class Bindings implements AsyncDisposable {
           Rights.PathRemoveDirectory,
           pathPtr,
           pathLen,
-          SymlinkBehaviour.NoFollow
+          SymlinkBehaviour.Follow,
+          CheckTrailingSlash.Ignore
         );
-        // Fixup for https://github.com/nodejs/node/issues/18014 as well as matching WASI behaviour in not following final symlink.
-        if (
-          (await this._openFiles.stat(path)).filetype !== FileType.Directory
-        ) {
-          throw new SystemError(E.NOTDIR);
+        try {
+          await this._openFiles.rmDir(path);
+        } catch (err: any) {
+          // Fixup for https://github.com/nodejs/node/issues/18014.
+          if (err.code === 'ENOENT') {
+            try {
+              await this._openFiles.stat(path);
+              err = new SystemError(E.NOTDIR);
+            } catch {}
+          }
+          throw err;
         }
-        await this._openFiles.rmDir(path);
       },
       fd_readdir: async (
         fd: fd_t,
@@ -904,7 +925,8 @@ export default class Bindings implements AsyncDisposable {
             Rights.PathReadlink,
             pathPtr,
             pathLen,
-            SymlinkBehaviour.NoFollow
+            SymlinkBehaviour.NoFollow,
+            CheckTrailingSlash.Ignore
           )
         );
         uint32_t.set(
@@ -929,7 +951,8 @@ export default class Bindings implements AsyncDisposable {
               Rights.PathFilestatGet,
               pathPtr,
               pathLen,
-              lookupFlagsToSymlinkBehaviour(lookupFlags)
+              lookupFlagsToSymlinkBehaviour(lookupFlags),
+              CheckTrailingSlash.MustBeExistingDirectory
             )
           )
         ),
@@ -981,7 +1004,8 @@ export default class Bindings implements AsyncDisposable {
           Rights.PathUnlinkFile,
           pathPtr,
           pathLen,
-          SymlinkBehaviour.NoFollow
+          SymlinkBehaviour.NoFollow,
+          CheckTrailingSlash.MustBeExistingDirectory
         );
         return this._openFiles.rmFile(path);
       },
@@ -1081,14 +1105,16 @@ export default class Bindings implements AsyncDisposable {
             Rights.PathLinkSource,
             oldPathPtr,
             oldPathLen,
-            lookupFlagsToSymlinkBehaviour(oldLookupFlags)
+            lookupFlagsToSymlinkBehaviour(oldLookupFlags),
+            CheckTrailingSlash.Ignore
           ),
           await this._resolve(
             newFd,
             Rights.PathLinkTarget,
             newPathPtr,
             newPathLen,
-            E.EXIST
+            SymlinkBehaviour.NoFollow,
+            CheckTrailingSlash.DirectoryOrNotExists
           )
         ),
       fd_datasync: (fd: fd_t) =>
@@ -1118,9 +1144,21 @@ export default class Bindings implements AsyncDisposable {
           Rights.PathSymlink,
           newPath,
           newPathLen,
-          E.EXIST
+          SymlinkBehaviour.NoFollow,
+          CheckTrailingSlash.MustBeExistingDirectory
         );
-        return this._openFiles.symLink(src, dst);
+        try {
+          await this._openFiles.symLink(src, dst);
+        } catch (err: any) {
+          if (err.code === 'EPERM') {
+            // On Windows, we get EPERM if the target file already exists. Check it.
+            try {
+              await this._openFiles.stat(dst);
+              err = new SystemError(E.EXIST);
+            } catch {}
+          }
+          throw err;
+        }
       },
       clock_time_get: (
         id: ClockId,
@@ -1156,7 +1194,8 @@ export default class Bindings implements AsyncDisposable {
             Rights.PathFilestatSetTimes,
             pathPtr,
             pathLen,
-            lookupFlagsToSymlinkBehaviour(lookupFlags)
+            lookupFlagsToSymlinkBehaviour(lookupFlags),
+            CheckTrailingSlash.MustBeExistingDirectory
           ),
           flags,
           newAccessTimeNs,
