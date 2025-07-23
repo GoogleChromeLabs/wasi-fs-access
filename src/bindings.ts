@@ -44,20 +44,83 @@ declare global {
 }
 
 export enum E {
-  SUCCESS = 0,
-  ACCES = 2,
-  BADF = 8,
-  CANCELED = 11,
-  EXIST = 20,
-  INVAL = 28,
-  ISDIR = 31,
-  LOOP = 32,
-  NAMETOOLONG = 37,
-  NOENT = 44,
-  NOSYS = 52,
-  NOTDIR = 54,
-  NOTEMPTY = 55,
-  NOTCAPABLE = 76
+  SUCCESS,
+  '2BIG',
+  ACCES,
+  ADDRINUSE,
+  ADDRNOTAVAIL,
+  AFNOSUPPORT,
+  AGAIN,
+  ALREADY,
+  BADF,
+  BADMSG,
+  BUSY,
+  CANCELED,
+  CHILD,
+  CONNABORTED,
+  CONNREFUSED,
+  CONNRESET,
+  DEADLK,
+  DESTADDRREQ,
+  DOM,
+  DQUOT,
+  EXIST,
+  FAULT,
+  FBIG,
+  HOSTUNREACH,
+  IDRM,
+  ILSEQ,
+  INPROGRESS,
+  INTR,
+  INVAL,
+  IO,
+  ISCONN,
+  ISDIR,
+  LOOP,
+  MFILE,
+  MLINK,
+  MSGSIZE,
+  MULTIHOP,
+  NAMETOOLONG,
+  NETDOWN,
+  NETRESET,
+  NETUNREACH,
+  NFILE,
+  NOBUFS,
+  NODEV,
+  NOENT,
+  NOEXEC,
+  NOLCK,
+  NOLINK,
+  NOMEM,
+  NOMSG,
+  NOPROTOOPT,
+  NOSPC,
+  NOSYS,
+  NOTCONN,
+  NOTDIR,
+  NOTEMPTY,
+  NOTRECOVERABLE,
+  NOTSOCK,
+  NOTSUP,
+  NOTTY,
+  NXIO,
+  OVERFLOW,
+  OWNERDEAD,
+  PERM,
+  PIPE,
+  PROTO,
+  PROTONOSUPPORT,
+  PROTOTYPE,
+  RANGE,
+  ROFS,
+  SPIPE,
+  SRCH,
+  STALE,
+  TIMEDOUT,
+  TXTBSY,
+  XDEV,
+  NOTCAPABLE
 }
 
 export class ExitStatus {
@@ -1331,40 +1394,11 @@ export default class Bindings implements AsyncDisposable {
       }
     } else if (err instanceof TypeError || err instanceof RangeError) {
       code = E.INVAL;
-    } else if (typeof err.code === 'string') {
+    } else if (typeof err.code === 'string' && err.code.startsWith('E')) {
       // https://nodejs.org/api/errors.html#errorcode
-      switch (err.code) {
-        case 'EACCES':
-        case 'EPERM':
-          code = E.ACCES;
-          break;
-        case 'EEXIST':
-          code = E.EXIST;
-          break;
-        case 'EISDIR':
-          code = E.ISDIR;
-          break;
-        case 'ENOENT':
-          code = E.NOENT;
-          break;
-        case 'ENOTDIR':
-          code = E.NOTDIR;
-          break;
-        case 'ENOTEMPTY':
-          code = E.NOTEMPTY;
-          break;
-        case 'ELOOP':
-          code = E.LOOP;
-          break;
-        case 'ENAMETOOLONG':
-          code = E.NAMETOOLONG;
-          break;
-        case 'EINVAL':
-          code = E.INVAL;
-          break;
-      }
+      code = E[err.code.slice(1) as keyof typeof E];
     }
-    if (code) {
+    if (code !== undefined) {
       // Before returning the code, store the original error details.
       // Ignore the preopen error we expect in all apps.
       if (!(err instanceof NoPreopen)) {
