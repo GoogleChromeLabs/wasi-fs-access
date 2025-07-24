@@ -17,6 +17,9 @@ importers:
       typescript:
         specifier: 5.8.3
         version: 5.8.3
+      why-is-node-running:
+        specifier: github:RReverser/why-is-node-running#source-maps
+        version: https://codeload.github.com/RReverser/why-is-node-running/tar.gz/766d0ef0217b3a3b78541dc6ac8c2ffa90e12d76
 
 packages:
 
@@ -208,6 +211,12 @@ packages:
   undici-types@7.8.0:
     resolution: {integrity: sha512-9UJ2xGDvQ43tYyVMpuHlsgApydB8ZKfVYTsLDhXkFL/6gfkp+U8xTGdh8pMJv1SpZna0zxG1DwsKZsreLbXBxw==}
 
+  why-is-node-running@https://codeload.github.com/RReverser/why-is-node-running/tar.gz/766d0ef0217b3a3b78541dc6ac8c2ffa90e12d76:
+    resolution: {tarball: https://codeload.github.com/RReverser/why-is-node-running/tar.gz/766d0ef0217b3a3b78541dc6ac8c2ffa90e12d76}
+    version: 3.2.2
+    engines: {node: '>=20.11'}
+    hasBin: true
+
 snapshots:
 
   '@esbuild/aix-ppc64@0.25.6':
@@ -340,3 +349,5 @@ snapshots:
   typescript@5.8.3: {}
 
   undici-types@7.8.0: {}
+
+  why-is-node-running@https://codeload.github.com/RReverser/why-is-node-running/tar.gz/766d0ef0217b3a3b78541dc6ac8c2ffa90e12d76: {}

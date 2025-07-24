@@ -20,6 +20,8 @@ if "--version" not in args:
 r = subprocess.run(
     [
         "node",
+        "--stack-trace-limit=1000",
+        "--enable-source-maps",
         "--experimental-wasm-jspi",
         "--import",
         "tsx",

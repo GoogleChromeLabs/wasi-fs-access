@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/node": "24.0.14",
     "tsx": "^4.20.3",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "why-is-node-running": "github:RReverser/why-is-node-running#source-maps"
   }
 }

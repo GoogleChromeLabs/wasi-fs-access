@@ -1388,7 +1388,14 @@ export default class Bindings implements AsyncDisposable {
     let code;
     if (err instanceof SystemError) {
       ({ code } = err);
-    } else if (err instanceof DOMException) {
+    } else if (err instanceof TypeError || err instanceof RangeError) {
+      code = E.INVAL;
+    } else if (typeof err.code === 'string' && err.code.startsWith('E')) {
+      // https://nodejs.org/api/errors.html#errorcode
+      code = E[err.code.slice(1) as keyof typeof E];
+    } else {
+      // Note: Node.js doesn't inherit from DOMException in some places (e.g. see https://github.com/nodejs/node/issues/40692)
+      // so we can only check the name and not `instanceof DOMException` which would've been a bit more reliable.
       switch (err.name) {
         case 'NotFoundError':
           code = E.NOENT;
@@ -1404,12 +1411,10 @@ export default class Bindings implements AsyncDisposable {
         case 'AbortError':
           code = E.CANCELED;
           break;
+        case 'TimeoutError':
+          code = E.TIMEDOUT;
+          break;
       }
-    } else if (err instanceof TypeError || err instanceof RangeError) {
-      code = E.INVAL;
-    } else if (typeof err.code === 'string' && err.code.startsWith('E')) {
-      // https://nodejs.org/api/errors.html#errorcode
-      code = E[err.code.slice(1) as keyof typeof E];
     }
     if (code !== undefined) {
       // Before returning the code, store the original error details.

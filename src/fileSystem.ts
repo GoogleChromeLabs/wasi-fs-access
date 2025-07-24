@@ -44,6 +44,7 @@ import {
 import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { Readable, Writable } from 'node:stream';
+import { Socket } from 'node:net';
 
 type ResolvedPath = string & { __resolved: true };
 
@@ -239,17 +240,12 @@ export class OpenFile implements AsyncDisposable {
 
   async [Symbol.asyncDispose]() {
     this._isOpen = false;
-    // Don't close real stdin/stdout/stderr, as they might be still needed by the parent process.
-    if (this.hostFd >= 3) {
-      await close(this.hostFd);
-    }
+    await close(this.hostFd);
   }
 }
 
 export class StdStream extends OpenFile {
-  constructor(
-    private readonly _stream: (Readable | Writable) & { fd: number }
-  ) {
+  constructor(private _stream: Socket & { fd: number }) {
     const { fd } = _stream;
 
     super(
@@ -271,7 +267,15 @@ export class StdStream extends OpenFile {
       return;
     }
     if (!this._stream.readableLength) {
-      await once(this._stream, 'readable', { signal });
+      try {
+        await once(this._stream, 'readable', { signal });
+      } finally {
+        // Release the stream from the event loop. Unfortunately, stdin doesn't
+        // have something like `hasRef()` like other reffable objects do,
+        // so we have to hope we're the only reader. But then, if we're not,
+        // a lot of stuff will be broken anyway.
+        this._stream.unref();
+      }
     }
     return this._stream.readableLength;
   }
@@ -330,6 +334,11 @@ export class StdStream extends OpenFile {
       totalWritten += buf.length;
     }
     return totalWritten;
+  }
+
+  async [Symbol.asyncDispose]() {
+    this._isOpen = false;
+    // Note: we don't close the stream, as it might be used by the process.
   }
 }
 
@@ -603,9 +612,7 @@ export class OpenFiles implements AsyncDisposable {
   }
 
   close(fd: fd_t) {
-    return (this._take(fd) as Partial<AsyncDisposable>)[
-      Symbol.asyncDispose
-    ]?.();
+    return this._take(fd)[Symbol.asyncDispose]();
   }
 
   async [Symbol.asyncDispose]() {
