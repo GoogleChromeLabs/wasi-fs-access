@@ -1133,9 +1133,6 @@ export default class Bindings implements AsyncDisposable {
                     case EventType.FdRead:
                     case EventType.FdWrite: {
                       let { fd } = union.data;
-                      // Just verify that the file descriptor is valid.
-                      // TODO: actually wait for stdin to be ready.
-                      // Other than that, even WASI spec says it should resolve immediately for regular files.
                       let file = this._openFiles.getFile(
                         fd,
                         Rights.PollFdReadWrite
