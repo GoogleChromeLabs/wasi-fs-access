@@ -45,6 +45,7 @@ import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { Readable, Writable } from 'node:stream';
 import { Socket } from 'node:net';
+import { join as joinPath } from 'node:path/posix';
 
 type ResolvedPath = string & { __resolved: true };
 
@@ -385,7 +386,7 @@ export class OpenDirectory extends OpenFile {
   joinPath(...components: string[]): ResolvedPath {
     // Note: this is a simple join, not a full path resolution.
     // We assume that components are already sanitized and don't contain any path traversal.
-    return [this._hostPath, ...components].join('/') as ResolvedPath;
+    return joinPath(this._hostPath, ...components) as ResolvedPath;
   }
 
   static async openDir(
