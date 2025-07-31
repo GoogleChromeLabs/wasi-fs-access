@@ -1,5 +1,5 @@
 import * as assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { opendir, readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import whyIsNodeRunning from 'why-is-node-running';
 import { Miniflare } from 'miniflare';
@@ -70,12 +70,17 @@ const mf = new Miniflare({
     },
     ...(
       await Promise.all(
-        dirs.map(async dir =>
-          (await readdir(dir, { recursive: true })).map(file => join(dir, file))
+        dirs.map(
+          async dir =>
+            await Array.fromAsync(
+              await opendir(dir, { recursive: true }),
+              entry =>
+                entry.isFile() ? [join(entry.parentPath, entry.name)] : []
+            )
         )
       )
     )
-      .flat()
+      .flat(2)
       .map(path => ({
         type: 'Data',
         path
