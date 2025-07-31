@@ -630,8 +630,8 @@ export default class Bindings implements AsyncDisposable {
     return resolvedPath;
   }
 
-  addPreOpen(hostPath: string, wasiPath: string) {
-    return this._openFiles.addPreOpen(hostPath, wasiPath);
+  addPreOpen(wasiPath: string, hostPath: string) {
+    return this._openFiles.addPreOpen(wasiPath, hostPath);
   }
 
   async _fileIO(

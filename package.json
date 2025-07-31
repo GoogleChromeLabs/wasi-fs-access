@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p .",
-    "watch": "tsc -p . -w",
+    "build": "pnpx esbuild --bundle --outfile=wasi-fs-access.mjs src/bindings.ts --platform=node --format=esm",
+    "watch": "npm run build -- --watch",
     "test": "py -3 tests/wasi-testsuite/test-runner/wasi_test_runner.py -t tests/wasi-testsuite/tests/c/testsuite tests/wasi-testsuite/tests/rust/testsuite tests/wasi-testsuite/tests/assemblyscript/testsuite --exclude-filter tests/skip.json -r tests/test-adapter.py"
   },
   "repository": {
@@ -21,7 +21,10 @@
   "homepage": "https://github.com/GoogleChromeLabs/wasi-fs-access#readme",
   "description": "",
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250731.0",
     "@types/node": "24.0.14",
+    "esbuild": "^0.25.8",
+    "miniflare": "^4.20250730.0",
     "tsx": "^4.20.3",
     "typescript": "5.8.3",
     "why-is-node-running": "github:RReverser/why-is-node-running#source-maps"
