@@ -142,9 +142,11 @@ export class OpenFile implements AsyncDisposable {
     if (openFlags & OpenFlags.Exclusive) {
       nodeFlags |= fsc.O_EXCL;
     }
-    if (openFlags & OpenFlags.Truncate) {
-      nodeFlags |= fsc.O_TRUNC;
-    }
+    // `TRUNCATE_EXISTING` mode seems broken on Windows (investigate more later).
+    // Truncate manually instead.
+    // if (openFlags & OpenFlags.Truncate) {
+    //   nodeFlags |= fsc.O_TRUNC;
+    // }
 
     if (fdFlags & FdFlags.DSync) {
       nodeFlags |= fsc.O_DSYNC;
@@ -165,7 +167,17 @@ export class OpenFile implements AsyncDisposable {
     // Note: do not use O_APPEND, as it opens us to kernel differences and shenanigans.
     // We already need to do our own position tracking anyway (since Node.js doesn't expose it), so we can handle appending ourselves.
 
-    return new OpenFile(await open(hostPath, nodeFlags), fdFlags, rights);
+    let file = new OpenFile(await open(hostPath, nodeFlags), fdFlags, rights);
+
+    if (
+      (openFlags & (OpenFlags.Truncate | OpenFlags.Create)) ===
+      OpenFlags.Truncate
+    ) {
+      // Simulate "truncate existing" by truncating the file to zero length.
+      await file.setSize(0);
+    }
+
+    return file;
   }
 
   private _position: number = 0;
